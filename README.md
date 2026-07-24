@@ -1,36 +1,49 @@
-# Spectra Auth SDK for iOS
+# Spectra AuthSDK for iOS
 
-Local Swift Package for Spectra Platform Auth integration.
+Swift Package 기반의 Spectra Platform iOS Auth SDK다. 이 저장소의 첫 구현 slice는 앱이 공개 가능한 Project/App Client 설정으로 `AuthClient`를 만들고, StorageSDK·NotificationSDK 같은 다른 SDK가 `TokenProvider`를 주입받아 사용자 bearer token을 요청에 붙일 수 있는 최소 경계를 제공한다.
 
-Implemented first slice:
+## 현재 구현 상태
 
-- `SpectraAuthClient` as an app-side token provider surface
-- `SpectraAuthConfiguration` with public project/client configuration only
-- `SpectraAccessTokenProviding` protocol compatible with downstream SDK token injection
-- `StaticSpectraAccessTokenProvider` and `InMemorySpectraAuthSessionStore` for local tests
-- HTTP transport abstraction for future hosted login / social exchange endpoints
+- Swift Package: `SpectraAuthSDK`
+- Public configuration: `baseURL`, `projectId`, `publicClientId`, `environment`, `redirectURI`
+- Public token provider: `TokenProvider`, `AuthClient`, `AccessToken`, `AuthSession`, `AppUser`
+- Request helper: `authorizationHeader(forceRefresh:)`, `authorizedRequest(_:forceRefresh:)`
+- Refresh boundary: `AuthTokenRefreshStrategy`
+- 검증: `swift test`
 
-Current boundary:
+이번 slice는 실제 소셜 로그인, Apple/Google provider 연동, Keychain 영구 저장, refresh token rotation, 운영 배포를 구현하지 않는다. 해당 기능은 Auth Platform Identity Plane의 app-user session API가 producer로 구현된 뒤 붙인다.
 
-- Do not put Project API tokens, provider secrets, Apple `.p8`, Google client secrets, or server-only credentials in an iOS app bundle.
-- Public hosted login, social provider exchange, refresh token rotation, Keychain persistence, and JWKS/session revocation are not implemented yet.
-- This package is intentionally usable as a local Swift Package before package registry publishing.
-
-Minimal local usage:
+## 사용 예시
 
 ```swift
+import Foundation
 import SpectraAuthSDK
 
-let auth = SpectraAuthClient(
-    configuration: SpectraAuthConfiguration(
-        baseURL: URL(string: "https://auth.spectra.kr")!,
-        projectId: "project-id",
-        publicClientId: "app_public_client",
-        environment: .test
-    ),
-    tokenProvider: StaticSpectraAccessTokenProvider(token: "development-access-token")
+let auth = AuthClient(
+    configuration: AuthClientConfiguration(
+        baseURL: URL(string: "https://auth.example.com")!,
+        projectId: "project_123",
+        publicClientId: "public_client_123",
+        environment: .test,
+        redirectURI: URL(string: "spectra-example://auth/callback")
+    )
 )
 
-let token = try await auth.accessToken()
+struct StorageClient {
+    let tokenProvider: any TokenProvider
+
+    func makeRequest(url: URL) async throws -> URLRequest {
+        try await tokenProvider.authorizedRequest(URLRequest(url: url))
+    }
+}
+
+let storage = StorageClient(tokenProvider: auth)
 ```
 
+모바일 앱 bundle에는 Project API token, provider client secret, Apple private key 같은 secret을 넣지 않는다. 앱은 AuthSDK를 통해 project/app-user context에 맞는 access token을 얻고, 다른 SDK는 `TokenProvider`만 의존한다.
+
+## 로컬 검증
+
+```bash
+swift test
+```

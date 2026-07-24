@@ -2,42 +2,51 @@
 
 ## 목적과 소유 범위
 
-`auth-sdk-ios`는 iOS 앱이 Spectra Platform Auth를 사용할 때 가져가는 공개 클라이언트 SDK다.
-앱 번들에는 공개 가능한 Project/App Client 설정만 넣고, 서버 전용 Project API token이나 provider
-secret은 포함하지 않는다.
+`auth-sdk-ios`는 Spectra Platform Auth의 iOS 공개 SDK를 소유한다. 앱이 공개 가능한 Project/App Client 설정으로 Auth 클라이언트를 만들고, StorageSDK·NotificationSDK 같은 다른 SDK에 app-user token provider를 주입하는 경계를 제공한다.
+
+이 저장소는 iOS SDK만 소유한다. Auth API producer, Identity Plane DB, provider secret 저장, Storage/Notification 서버 검증과 운영 배포는 각각 해당 플랫폼 저장소의 소유 범위다.
 
 ## 확정된 결정
 
-- iOS SDK는 Android/JavaScript보다 먼저 기준 SDK로 만든다.
-- SDK 설정에는 `baseURL`, `projectId`, `publicClientId`, `environment`처럼 공개 가능한 값만 둔다.
-- downstream SDK(Notification/Storage)는 AuthSDK가 제공하는 app-user access token provider에서 token을
-  받아 사용한다.
-- 이번 첫 slice는 실제 hosted login이나 refresh session을 구현하지 않고, token provider surface와
-  local test용 static/in-memory provider를 먼저 제공한다.
-- Project API token은 Console/server-side workload용이며 iOS 앱에 직접 넣지 않는다.
+- iOS 앱 bundle에는 Project API token, provider client secret, Apple private key, Console session cookie를 넣지 않는다.
+- SDK configuration에는 공개 가능한 `baseURL`, `projectId`, `publicClientId`, `environment`, `redirectURI`만 둔다.
+- `AuthClient`는 `TokenProvider`를 구현하며 다른 SDK는 concrete AuthSDK가 아니라 `TokenProvider` protocol을 주입받는다.
+- 요청별 Authorization 부착은 `TokenProvider.authorizedRequest(_:forceRefresh:)` 또는 `authorizationHeader(forceRefresh:)`를 사용한다.
+- access token cache/expiry와 refresh는 `AuthClient` actor 내부와 `AuthTokenRefreshStrategy` 경계에 둔다.
+- 현재 refresh 기본 구현은 의도적으로 `AuthError.refreshUnavailable`로 닫는다. 실제 refresh/session rotation은 Auth Platform Identity Plane의 app-user API가 구현된 뒤 연결한다.
 
 ## 현재 구현 경계
 
-- `SpectraAuthClient`는 `SpectraAccessTokenProviding`을 구현한다.
-- `StaticSpectraAccessTokenProvider`는 로컬 패키지 연동과 테스트를 위한 임시 provider다.
-- `InMemorySpectraAuthSessionStore`는 Keychain persistence 이전 단계의 테스트 저장소다.
-- HTTP transport abstraction은 준비됐지만 공개 login/exchange endpoint 계약이 아직 확정되지 않아
-  실제 네트워크 로그인 메서드는 제공하지 않는다.
+- Swift Package `SpectraAuthSDK`가 생성됐다.
+- Public surface:
+  - `AuthClientConfiguration`
+  - `AuthEnvironment`
+  - `TokenProvider`
+  - `AuthClient`
+  - `AccessToken`
+  - `AuthSession`
+  - `AppUser`
+  - `AuthTokenRefreshStrategy`
+  - `AuthError`
+- `AuthClient`는 actor이며 만료되지 않은 in-memory access token은 그대로 반환하고, 만료됐거나 `forceRefresh`면 주입된 refresh strategy를 호출한다.
+- unit test는 cache hit, 만료 refresh, bearer request helper, logout 후 상태 삭제를 검증한다.
 
-## 함께 확인할 저장소
+## 변경 시 함께 확인할 계약·저장소
 
-- `Spectra-Platform/auth-platform`: 공개 Auth API, app-user token/session 계약
-- `Spectra-Platform/notification-sdk-ios`: Auth token provider를 소비할 iOS Push SDK
-- `Spectra-Platform/storage-sdk-ios`: Auth token provider를 소비할 iOS Storage SDK 예정
-- `spectra-ios`: 실제 앱에 local package로 연결해 검증할 대상
+- `Spectra-Platform/auth-platform`: Identity Plane, app-user access/refresh session producer, JWKS 또는 introspection 결정
+- `Spectra-Platform/storage-platform`: app-user token 검증과 user-root object scope
+- `Spectra-Platform/delivery-platform` 또는 Notification/Push 관련 저장소: device registration과 user-scoped preference token 검증
+- `spectra-contracts`: Auth public contract의 app session, social challenge/exchange, refresh/logout, JWKS operation
 
-## 남은 작업
+## 남은 작업과 미확정 항목
 
-- hosted login / social provider exchange 공개 계약 확정
-- access/refresh token 모델과 rotation·reuse detection·logout revocation 공개화
-- Keychain 기반 session store 구현
-- NotificationSDK/StorageSDK가 AuthSDK provider를 직접 받도록 의존성 정리
-- 실제 Spectra 앱 local package 연동과 실기기 E2E
+- Apple/Google native sign-in entrypoint와 Auth social exchange API 연결
+- Keychain 기반 refresh token/session 저장
+- refresh token rotation, reuse detection, logout revocation 연결
+- access token이 JWT인지 opaque token + introspection인지 최종 확정
+- token TTL, refresh rotation grace, signing key/JWKS overlap
+- 실제 iOS 앱·실기기 E2E와 운영 배포
 
-마지막 코드 대조: 2026-07-24
+## 마지막으로 코드와 대조한 날짜
 
+- 2026-07-24
