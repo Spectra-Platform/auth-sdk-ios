@@ -1,5 +1,16 @@
 # WORKLOG
 
+## 2026-07-24 — AuthSDK iOS integration guide
+
+- 상태: 완료
+- 목적: iOS 앱과 다른 SDK가 AuthSDK를 token provider로 사용하는 방식을 문서화한다.
+- 주요 변경 영역:
+  - README에 integration guide 링크와 미완료 경계 추가
+  - `docs/guides/ios-auth-sdk-integration.md` 추가
+  - HANDOFF와 상세 작업 로그 갱신
+- 검증 상태: `swift test` 4 tests, 문서 파일 존재 확인, `git diff --check` 통과
+- 상세 기록: [`docs/work-logs/2026-07-24-02-auth-sdk-integration-docs.md`](docs/work-logs/2026-07-24-02-auth-sdk-integration-docs.md)
+
 ## 2026-07-24 — AuthSDK token provider first slice
 
 - 상태: 완료

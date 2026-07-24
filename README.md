@@ -15,6 +15,8 @@ Swift Package 기반의 Spectra Platform iOS Auth SDK다. 이 저장소의 첫 �
 
 ## 사용 예시
 
+자세한 앱 통합 흐름은 [iOS AuthSDK integration guide](docs/guides/ios-auth-sdk-integration.md)를 기준으로 본다.
+
 ```swift
 import Foundation
 import SpectraAuthSDK
@@ -47,3 +49,11 @@ let storage = StorageClient(tokenProvider: auth)
 ```bash
 swift test
 ```
+
+## 현재 미완료 경계
+
+- Apple/Google native sign-in entrypoint
+- Auth Platform social exchange API 연동
+- Keychain refresh session 저장
+- refresh token rotation/reuse detection/logout revocation
+- 실제 Spectra iOS 앱 integration과 실기기 E2E

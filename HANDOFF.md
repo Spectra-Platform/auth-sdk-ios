@@ -30,6 +30,7 @@
   - `AuthError`
 - `AuthClient`는 actor이며 만료되지 않은 in-memory access token은 그대로 반환하고, 만료됐거나 `forceRefresh`면 주입된 refresh strategy를 호출한다.
 - unit test는 cache hit, 만료 refresh, bearer request helper, logout 후 상태 삭제를 검증한다.
+- iOS 앱 통합 기준 문서는 `docs/guides/ios-auth-sdk-integration.md`에 둔다.
 
 ## 변경 시 함께 확인할 계약·저장소
 
