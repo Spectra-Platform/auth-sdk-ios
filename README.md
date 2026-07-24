@@ -5,6 +5,7 @@ Swift Package 기반의 Spectra Platform iOS Auth SDK다. 이 저장소의 첫 �
 ## 현재 구현 상태
 
 - Swift Package: `SpectraAuthSDK`
+- Package URL: `https://github.com/Spectra-Platform/auth-sdk-ios.git`
 - Public configuration: `baseURL`, `projectId`, `publicClientId`, `environment`, `redirectURI`
 - Public token provider: `TokenProvider`, `AuthClient`, `AccessToken`, `AuthSession`, `AppUser`
 - Request helper: `authorizationHeader(forceRefresh:)`, `authorizedRequest(_:forceRefresh:)`
@@ -12,6 +13,40 @@ Swift Package 기반의 Spectra Platform iOS Auth SDK다. 이 저장소의 첫 �
 - 검증: `swift test`
 
 이번 slice는 실제 소셜 로그인, Apple/Google provider 연동, Keychain 영구 저장, refresh token rotation, 운영 배포를 구현하지 않는다. 해당 기능은 Auth Platform Identity Plane의 app-user session API가 producer로 구현된 뒤 붙인다.
+
+## 설치
+
+Xcode에서 `File > Add Package Dependencies...`를 열고 아래 Git URL을 추가한다.
+
+```text
+https://github.com/Spectra-Platform/auth-sdk-ios.git
+```
+
+개발 중에는 `main` branch를 사용할 수 있다.
+
+```swift
+.package(
+    url: "https://github.com/Spectra-Platform/auth-sdk-ios.git",
+    branch: "main"
+)
+```
+
+버전 태그가 발행된 뒤에는 앱에서 SemVer 범위를 고정한다.
+
+```swift
+.package(
+    url: "https://github.com/Spectra-Platform/auth-sdk-ios.git",
+    .upToNextMinor(from: "0.1.0")
+)
+```
+
+target dependency에는 product 이름을 사용한다.
+
+```swift
+.product(name: "SpectraAuthSDK", package: "auth-sdk-ios")
+```
+
+릴리즈 전 확인 절차는 [release checklist](docs/guides/release-checklist.md)를 따른다. 현재 저장소는 SwiftPM Git package로 소비 가능하도록 준비하며, 최초 SemVer tag는 공개 버전 번호를 확정한 뒤 별도로 생성한다.
 
 ## 사용 예시
 
@@ -47,6 +82,7 @@ let storage = StorageClient(tokenProvider: auth)
 ## 로컬 검증
 
 ```bash
+swift package describe
 swift test
 ```
 

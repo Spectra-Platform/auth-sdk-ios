@@ -1,5 +1,17 @@
 # WORKLOG
 
+## 2026-07-24 — AuthSDK SwiftPM release readiness
+
+- 상태: 완료
+- 목적: iOS AuthSDK를 Swift Package Manager Git URL로 붙일 수 있는 배포 준비 상태로 정리한다.
+- 주요 변경 영역:
+  - GitHub Actions SwiftPM CI 추가
+  - README에 Git URL, branch, SemVer tag 설치 예시 추가
+  - release checklist와 tag/secret 금지 기준 추가
+  - HANDOFF와 상세 작업 로그 갱신
+- 검증 상태: `swift package resolve`, `swift package describe`, `swift test` 4 tests, workflow YAML parse, `git diff --check` 통과
+- 상세 기록: [`docs/work-logs/2026-07-24-03-auth-sdk-spm-release-readiness.md`](docs/work-logs/2026-07-24-03-auth-sdk-spm-release-readiness.md)
+
 ## 2026-07-24 — AuthSDK iOS integration guide
 
 - 상태: 완료
