@@ -13,7 +13,11 @@
 - `AuthClient`는 `TokenProvider`를 구현하며 다른 SDK는 concrete AuthSDK가 아니라 `TokenProvider` protocol을 주입받는다.
 - 요청별 Authorization 부착은 `TokenProvider.authorizedRequest(_:forceRefresh:)` 또는 `authorizationHeader(forceRefresh:)`를 사용한다.
 - access token cache/expiry와 refresh는 `AuthClient` actor 내부와 `AuthTokenRefreshStrategy` 경계에 둔다.
-- 현재 refresh 기본 구현은 의도적으로 `AuthError.refreshUnavailable`로 닫는다. 실제 refresh/session rotation은 Auth Platform Identity Plane의 app-user API가 구현된 뒤 연결한다.
+- 기본 refresh 구현은 의도적으로 `AuthError.refreshUnavailable`로 닫는다. 추가로
+  `AppUserAccessTokenRefreshStrategy`가 Auth Platform internal/dev app-user token endpoint를 호출해
+  `storage`·`email`·`notification` 단일 service token을 받아오는 최소 HTTP surface를 제공한다.
+  이 strategy는 local/dev bridge용이며 공개 hosted social session, refresh token rotation과 logout
+  revocation은 아직 구현하지 않았다.
 - Swift Package Manager 배포는 Git URL 기반으로 시작한다. repository URL은 `https://github.com/Spectra-Platform/auth-sdk-ios.git`, product 이름은 `SpectraAuthSDK`다.
 - release tag는 `vMAJOR.MINOR.PATCH` 형식으로 만들며, 최초 tag는 공개 버전 번호를 확정한 뒤 생성한다. 현재 문서와 CI는 tag 배포가 가능한 상태를 준비하지만 tag 자체는 만들지 않는다.
 
@@ -32,6 +36,9 @@
   - `AuthTokenRefreshStrategy`
   - `AuthError`
 - `AuthClient`는 actor이며 만료되지 않은 in-memory access token은 그대로 반환하고, 만료됐거나 `forceRefresh`면 주입된 refresh strategy를 호출한다.
+- `AppUserAccessTokenRefreshStrategy`는 Auth Platform `POST /internal/dev/v1/app-user-access-tokens`를
+  호출하고, 응답의 project/environment/app_user/audience가 요청 service와 일치할 때만 `AuthSession`을
+  갱신한다.
 - unit test는 cache hit, 만료 refresh, bearer request helper, logout 후 상태 삭제를 검증한다.
 - iOS 앱 통합 기준 문서는 `docs/guides/ios-auth-sdk-integration.md`에 둔다.
 - SwiftPM 릴리즈 기준은 `docs/guides/release-checklist.md`에 둔다.

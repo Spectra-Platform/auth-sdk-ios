@@ -56,7 +56,8 @@ let configuration = AuthClientConfiguration(
 
 ## 3. AuthClient 생성
 
-현재 SDK는 token provider 경계를 먼저 제공한다. 실제 Apple/Google sign-in과 hosted exchange는 아직 구현되지 않았다.
+현재 SDK는 token provider 경계와 local/dev app-user token bridge 호출 strategy를 제공한다. 실제
+Apple/Google sign-in과 hosted exchange는 아직 구현되지 않았다.
 
 ```swift
 let authClient = AuthClient(configuration: configuration)
@@ -83,6 +84,22 @@ let authClient = AuthClient(
 
 이 방식은 현재 slice에서 integration 테스트를 쉽게 하기 위한 경계다. 운영 social login 대체물로 취급하지 않는다.
 
+Auth Platform internal/dev bridge를 직접 확인해야 하면 service별 refresh strategy를 주입한다.
+
+```swift
+let emailAuthClient = AuthClient(
+    configuration: configuration,
+    refreshStrategy: AppUserAccessTokenRefreshStrategy(
+        service: .email,
+        additionalHeaders: ["X-Spectra-Internal-Key": "local-dev-only"],
+        appUserIdProvider: { "app_user_xxx" }
+    )
+)
+```
+
+`additionalHeaders`의 internal key는 local/dev bridge 검증용이다. 운영 앱 bundle에는 internal key,
+Project API token 또는 provider secret을 넣지 않는다.
+
 ## 4. Access token 조회
 
 ```swift
@@ -96,7 +113,9 @@ print(token.value)
 let refreshed = try await authClient.getAccessToken(forceRefresh: true)
 ```
 
-현재 기본 refresh strategy는 `AuthError.refreshUnavailable`을 반환한다. 실제 refresh/session rotation은 Auth Platform Identity Plane의 app-user session API가 구현된 뒤 연결한다.
+현재 기본 refresh strategy는 `AuthError.refreshUnavailable`을 반환한다. `AppUserAccessTokenRefreshStrategy`는
+local/dev bridge용이며, 실제 refresh/session rotation은 Auth Platform Identity Plane의 app-user
+session API가 구현된 뒤 연결한다.
 
 ## 5. Authorized request 생성
 
@@ -165,4 +184,3 @@ await authClient.logout()
 - refresh token rotation/reuse detection
 - logout server revocation
 - 실제 Spectra iOS app integration
-

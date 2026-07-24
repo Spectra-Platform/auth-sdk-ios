@@ -1,5 +1,13 @@
 # WORKLOG
 
+## 2026-07-24 — App-user access token refresh strategy
+
+- 상태: Swift Package 구현·검증 완료, 운영 social/refresh session은 미구현
+- 목적: AuthSDK가 단순 TokenProvider 뼈대에서 끝나지 않고 Auth Platform의 app-user token producer를 호출해 Email·Notification·Storage SDK에 줄 bearer token을 받을 수 있게 한다.
+- 결과: `AuthService`와 `AppUserAccessTokenRefreshStrategy`를 추가했다. strategy는 Auth Platform internal/dev app-user token endpoint를 호출하고 project/environment/app_user/audience mismatch를 fail-closed 처리한다.
+- 검증: `swift test` 6 tests 통과
+- 상세 기록: [`docs/work-logs/2026-07-24-04-app-user-token-refresh-strategy.md`](docs/work-logs/2026-07-24-04-app-user-token-refresh-strategy.md)
+
 ## 2026-07-24 — AuthSDK SwiftPM release readiness
 
 - 상태: 완료

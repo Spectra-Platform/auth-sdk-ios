@@ -26,3 +26,9 @@ public enum AuthEnvironment: String, Equatable, Sendable {
     case test
     case live
 }
+
+public enum AuthService: String, Equatable, Sendable, Codable {
+    case storage
+    case email
+    case notification
+}
