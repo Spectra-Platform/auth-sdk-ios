@@ -5,3 +5,6 @@ DerivedData/
 *.xcworkspace/
 *.xcuserstate
 xcuserdata/
+docs/
+WORKLOG.md
+HANDOFF.md
