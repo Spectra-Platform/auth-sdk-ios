@@ -31,7 +31,7 @@ public extension TokenProvider {
     }
 }
 
-public struct AccessToken: Equatable, Sendable {
+public struct AccessToken: Codable, Equatable, Sendable {
     public let value: String
     public let tokenType: String
     public let expiresAt: Date

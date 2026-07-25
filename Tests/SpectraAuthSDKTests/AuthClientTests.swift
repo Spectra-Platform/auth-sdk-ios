@@ -155,6 +155,114 @@ final class AuthClientTests: XCTestCase {
             XCTFail("Unexpected error: \(error)")
         }
     }
+
+    func testAuthServiceIncludesChatAndCallAudiences() {
+        XCTAssertEqual(AuthService.chat.rawValue, "chat")
+        XCTAssertEqual(AuthService.call.rawValue, "call")
+    }
+
+    func testConfigurationPresetsKeepExistingInitializerCompatible() throws {
+        let local = AuthClientConfiguration.local(
+            projectId: "project_123",
+            publicClientId: "public_client_123"
+        )
+        let live = AuthClientConfiguration.live(
+            projectId: "project_123",
+            publicClientId: "public_client_123",
+            redirectURI: URL(string: "spectra://callback")
+        )
+        let custom = AuthClientConfiguration.custom(
+            baseURL: URL(string: "https://auth.custom.test")!,
+            projectId: "project_123",
+            publicClientId: "public_client_123",
+            environment: .test
+        )
+        let existingInitializer = AuthClientConfiguration(
+            baseURL: URL(string: "https://auth.example.test")!,
+            projectId: "project_123",
+            publicClientId: "public_client_123",
+            environment: .test
+        )
+
+        XCTAssertEqual(local.baseURL.absoluteString, "http://127.0.0.1:8081")
+        XCTAssertEqual(local.environment, .test)
+        XCTAssertEqual(live.baseURL.absoluteString, "https://auth.spectra.kr")
+        XCTAssertEqual(live.environment, .live)
+        XCTAssertEqual(live.redirectURI?.absoluteString, "spectra://callback")
+        XCTAssertEqual(custom.baseURL.absoluteString, "https://auth.custom.test")
+        XCTAssertEqual(try existingInitializer.validated(), existingInitializer)
+    }
+
+    func testConfigurationValidationReportsReadableError() {
+        let configuration = AuthClientConfiguration(
+            baseURL: URL(string: "relative/path")!,
+            projectId: " ",
+            publicClientId: "public_client_123",
+            environment: .test
+        )
+
+        do {
+            _ = try configuration.validated()
+            XCTFail("Expected invalidConfiguration")
+        } catch let AuthError.invalidConfigurationReason(reason) {
+            XCTAssertTrue(reason.contains("baseURL"))
+        } catch {
+            XCTFail("Unexpected error: \(error)")
+        }
+    }
+
+    func testRestoringCachedSessionUsesStoredSessionWithoutRefresh() async throws {
+        let cache = InMemoryAuthSessionCache(session: .fixture(tokenValue: "cached-from-cache"))
+        let refreshStrategy = RecordingRefreshStrategy(refreshedSession: .fixture(tokenValue: "refreshed"))
+
+        let client = try await AuthClient.restoringCachedSession(
+            configuration: .fixture,
+            refreshStrategy: refreshStrategy,
+            sessionCache: cache,
+            clock: FixedClock(now: Date(timeIntervalSince1970: 1_000))
+        )
+
+        let token = try await client.getAccessToken()
+        let callCount = await refreshStrategy.callCount
+
+        XCTAssertEqual(token.value, "cached-from-cache")
+        XCTAssertEqual(callCount, 0)
+    }
+
+    func testRefreshStoresSessionInCache() async throws {
+        let cache = InMemoryAuthSessionCache()
+        let refreshed = AuthSession.fixture(
+            tokenValue: "refreshed-and-cached",
+            expiresAt: Date(timeIntervalSince1970: 3_000)
+        )
+        let client = AuthClient(
+            configuration: .fixture,
+            refreshStrategy: RecordingRefreshStrategy(refreshedSession: refreshed),
+            sessionCache: cache,
+            clock: FixedClock(now: Date(timeIntervalSince1970: 1_000))
+        )
+
+        let token = try await client.refresh()
+        let cached = try await cache.loadSession()
+
+        XCTAssertEqual(token.value, "refreshed-and-cached")
+        XCTAssertEqual(cached, refreshed)
+    }
+
+    func testRestoreSessionFromCacheUpdatesCurrentUser() async throws {
+        let cache = InMemoryAuthSessionCache(session: .fixture(tokenValue: "cached-from-cache"))
+        let client = AuthClient(
+            configuration: .fixture,
+            sessionCache: cache,
+            clock: FixedClock(now: Date(timeIntervalSince1970: 1_000))
+        )
+
+        let restored = try await client.restoreSessionFromCache()
+        let currentUser = await client.currentUser
+
+        XCTAssertEqual(restored?.accessToken.value, "cached-from-cache")
+        XCTAssertEqual(currentUser?.id, "app_user_123")
+    }
 }
 
 private actor RecordingRefreshStrategy: AuthTokenRefreshStrategy {

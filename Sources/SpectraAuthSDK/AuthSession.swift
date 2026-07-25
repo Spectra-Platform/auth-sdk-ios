@@ -1,6 +1,6 @@
 import Foundation
 
-public struct AuthSession: Equatable, Sendable {
+public struct AuthSession: Codable, Equatable, Sendable {
     public let user: AppUser
     public let accessToken: AccessToken
 
@@ -10,7 +10,7 @@ public struct AuthSession: Equatable, Sendable {
     }
 }
 
-public struct AppUser: Equatable, Sendable {
+public struct AppUser: Codable, Equatable, Sendable {
     public let id: String
     public let projectId: String
 

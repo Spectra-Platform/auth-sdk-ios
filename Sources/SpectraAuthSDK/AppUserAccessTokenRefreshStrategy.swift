@@ -88,13 +88,13 @@ private func endpointURL(baseURL: URL) throws -> URL {
     guard var components = URLComponents(url: baseURL, resolvingAgainstBaseURL: false),
           components.scheme != nil,
           components.host != nil else {
-        throw AuthError.invalidConfiguration
+        throw AuthError.invalidConfigurationReason("Auth baseURL must include a scheme and host.")
     }
     components.path = "/internal/dev/v1/app-user-access-tokens"
     components.query = nil
     components.fragment = nil
     guard let url = components.url else {
-        throw AuthError.invalidConfiguration
+        throw AuthError.invalidConfigurationReason("Auth token endpoint URL could not be built from baseURL.")
     }
     return url
 }
