@@ -233,6 +233,136 @@ final class AuthClientTests: XCTestCase {
         XCTAssertEqual(logoutJSON["refresh_token"] as? String, "spur_rotated")
     }
 
+    func testPublicAppUserSessionStrategyCreatesRefreshesRotatesAndLogsOut() async throws {
+        let transport = QueueingTransport(responses: [
+            .success(
+                statusCode: 201,
+                body: appUserSessionBody(
+                    refreshToken: "spur_public_initial",
+                    accessToken: "jwt_public_storage_initial",
+                    refreshExpiresAt: "2040-01-10T00:00:00.000Z",
+                    accessExpiresAt: "2040-01-02T03:04:05.000Z",
+                    sessionId: "00000000-0000-4000-8000-000000000201",
+                    appUserId: "usr_public_123",
+                    service: "storage"
+                )
+            ),
+            .success(
+                statusCode: 201,
+                body: appUserSessionBody(
+                    refreshToken: "spur_public_email_rotated",
+                    accessToken: "jwt_public_email",
+                    refreshExpiresAt: "2040-01-20T00:00:00.000Z",
+                    accessExpiresAt: "2040-01-02T03:19:05.000Z",
+                    sessionId: "00000000-0000-4000-8000-000000000202",
+                    appUserId: "usr_public_123",
+                    service: "email"
+                )
+            ),
+            .success(
+                statusCode: 201,
+                body: appUserSessionBody(
+                    refreshToken: "spur_public_storage_rotated",
+                    accessToken: "jwt_public_storage_rotated",
+                    refreshExpiresAt: "2040-01-30T00:00:00.000Z",
+                    accessExpiresAt: "2040-01-02T03:34:05.000Z",
+                    sessionId: "00000000-0000-4000-8000-000000000203",
+                    appUserId: "usr_public_123",
+                    service: "storage"
+                )
+            ),
+            .success(statusCode: 204, body: Data()),
+        ])
+        let strategy = PublicAppUserSessionStrategy(
+            service: .storage,
+            sessionProvider: DevMockAppUserSessionProvider(providerSubject: "dev-user-1"),
+            accessTtlSeconds: 900,
+            transport: transport,
+            clock: FixedClock(now: Date(timeIntervalSince1970: 1_000))
+        )
+        let cache = InMemoryAuthSessionCache()
+        let client = AuthClient(
+            configuration: .fixture,
+            refreshStrategy: strategy,
+            sessionCache: cache,
+            clock: FixedClock(now: Date(timeIntervalSince1970: 1_000)),
+            defaultService: .storage
+        )
+
+        let initialStorageToken = try await client.getAccessToken(for: .storage, forceRefresh: true)
+        let emailToken = try await client.getAccessToken(for: .email, forceRefresh: true)
+        let rotatedStorageToken = try await client.getAccessToken(for: .storage, forceRefresh: true)
+        let cachedStorageSession = try await cache.loadSession(for: .storage)
+        let cachedEmailSession = try await cache.loadSession(for: .email)
+        await client.logout()
+        let clearedStorageSession = try await cache.loadSession(for: .storage)
+        let clearedEmailSession = try await cache.loadSession(for: .email)
+        let requests = await transport.requests
+
+        XCTAssertEqual(initialStorageToken.value, "jwt_public_storage_initial")
+        XCTAssertEqual(emailToken.value, "jwt_public_email")
+        XCTAssertEqual(rotatedStorageToken.value, "jwt_public_storage_rotated")
+        XCTAssertEqual(cachedStorageSession?.refreshToken?.value, "spur_public_storage_rotated")
+        XCTAssertEqual(cachedEmailSession?.refreshToken?.value, "spur_public_storage_rotated")
+        XCTAssertNil(clearedStorageSession)
+        XCTAssertNil(clearedEmailSession)
+        XCTAssertEqual(requests.count, 4)
+        XCTAssertEqual(requests[0].url?.path, "/v1/app-user-sessions/dev-provider")
+        XCTAssertEqual(requests[1].url?.path, "/v1/app-user-sessions/refresh")
+        XCTAssertEqual(requests[2].url?.path, "/v1/app-user-sessions/refresh")
+        XCTAssertEqual(requests[3].url?.path, "/v1/app-user-sessions/logout")
+        XCTAssertNil(requests[0].value(forHTTPHeaderField: "X-Spectra-Internal-Key"))
+        XCTAssertNil(requests[1].value(forHTTPHeaderField: "X-Spectra-Internal-Key"))
+
+        let createJSON = try jsonBody(from: requests[0])
+        XCTAssertEqual(createJSON["project_id"] as? String, "project_123")
+        XCTAssertEqual(createJSON["public_client_id"] as? String, "public_client_123")
+        XCTAssertEqual(createJSON["environment"] as? String, "test")
+        XCTAssertEqual(createJSON["provider"] as? String, "dev_mock")
+        XCTAssertEqual(createJSON["provider_subject"] as? String, "dev-user-1")
+        XCTAssertEqual(createJSON["service"] as? String, "storage")
+        XCTAssertNil(createJSON["access_ttl_seconds"])
+        XCTAssertNil(createJSON["refresh_ttl_seconds"])
+
+        let emailRefreshJSON = try jsonBody(from: requests[1])
+        XCTAssertEqual(emailRefreshJSON["refresh_token"] as? String, "spur_public_initial")
+        XCTAssertEqual(emailRefreshJSON["service"] as? String, "email")
+        XCTAssertEqual(emailRefreshJSON["access_ttl_seconds"] as? Int, 900)
+
+        let storageRefreshJSON = try jsonBody(from: requests[2])
+        XCTAssertEqual(storageRefreshJSON["refresh_token"] as? String, "spur_public_email_rotated")
+        XCTAssertEqual(storageRefreshJSON["service"] as? String, "storage")
+        XCTAssertEqual(storageRefreshJSON["access_ttl_seconds"] as? Int, 900)
+
+        let logoutJSON = try jsonBody(from: requests[3])
+        XCTAssertEqual(logoutJSON["refresh_token"] as? String, "spur_public_storage_rotated")
+    }
+
+    func testDevMockSessionProviderRejectsLiveEnvironmentBeforeNetworkCall() async throws {
+        let transport = QueueingTransport(responses: [])
+        let strategy = PublicAppUserSessionStrategy(
+            service: .storage,
+            sessionProvider: DevMockAppUserSessionProvider(providerSubject: "dev-user-1"),
+            transport: transport
+        )
+        let client = AuthClient(
+            configuration: .liveFixture,
+            refreshStrategy: strategy
+        )
+
+        do {
+            _ = try await client.getAccessToken(for: .storage, forceRefresh: true)
+            XCTFail("Expected dev_mock provider to reject live configuration")
+        } catch let AuthError.invalidConfigurationReason(reason) {
+            XCTAssertTrue(reason.contains("dev_mock"))
+        } catch {
+            XCTFail("Unexpected error: \(error)")
+        }
+
+        let requests = await transport.requests
+        XCTAssertTrue(requests.isEmpty)
+    }
+
     func testAuthServiceIncludesChatAndCallAudiences() {
         XCTAssertEqual(AuthService.chat.rawValue, "chat")
         XCTAssertEqual(AuthService.call.rawValue, "call")
@@ -562,6 +692,14 @@ private extension AuthClientConfiguration {
         projectId: "project_123",
         publicClientId: "public_client_123",
         environment: .test,
+        redirectURI: URL(string: "spectra-example://auth/callback")
+    )
+
+    static let liveFixture = AuthClientConfiguration(
+        baseURL: URL(string: "https://auth.example.test")!,
+        projectId: "project_123",
+        publicClientId: "public_client_123",
+        environment: .live,
         redirectURI: URL(string: "spectra-example://auth/callback")
     )
 }

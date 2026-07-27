@@ -9,7 +9,7 @@ Swift Package 기반의 Spectra Platform iOS Auth SDK다. 이 저장소의 첫 �
 - Public configuration: `baseURL`, `projectId`, `publicClientId`, `environment`, `redirectURI`
 - Public token provider: `TokenProvider`, `ServiceTokenProvider`, `AuthClient`, `AccessToken`, `AuthSession`, `AppUser`, `AppUserRefreshToken`
 - Request helper: `authorizationHeader(forceRefresh:)`, `authorizedRequest(_:forceRefresh:)`
-- Refresh boundary: `AuthTokenRefreshStrategy`, `AppUserAccessTokenRefreshStrategy`, `AppUserRefreshSessionStrategy`
+- Refresh boundary: `AuthTokenRefreshStrategy`, `PublicAppUserSessionStrategy`, `AppUserSessionProvider`, `DevMockAppUserSessionProvider`, `AppUserAccessTokenRefreshStrategy`, `AppUserRefreshSessionStrategy`
 - Environment helpers: `AuthClientConfiguration.live(...)`, `.local(...)`, `.custom(...)`
 - Session cache boundary: `AuthSessionCache`, `ServiceAuthSessionCache`, `InMemoryAuthSessionCache`, `KeychainAuthSessionCache`
 - 검증: `swift test`
@@ -18,10 +18,13 @@ Swift Package 기반의 Spectra Platform iOS Auth SDK다. 이 저장소의 첫 �
 StorageSDK·NotificationSDK·ChatSDK·CallSDK는 같은 Auth 객체를 공유하되 각각 자신의 service audience token을
 요청할 수 있고, SDK는 service별 access token을 별도로 cache한다.
 
-`AppUserAccessTokenRefreshStrategy`는 현재 Auth Platform의 internal/dev app-user token bridge를 호출한다.
-`AppUserRefreshSessionStrategy`는 internal/dev app-user refresh session bridge를 호출해 최초 session 생성,
-refresh token 1회성 회전, logout revoke를 처리한다. 실제 소셜 로그인, Apple/Google provider 연동,
-운영 배포와 공개 hosted social session API는 아직 구현하지 않는다.
+`PublicAppUserSessionStrategy`는 Auth Platform의 public app-user session API를 호출한다. 이번 slice에서
+지원하는 provider는 non-production `dev_mock`이며, 최초 session 생성은
+`POST /v1/app-user-sessions/dev-provider`, 이후 refresh/logout은 각각
+`POST /v1/app-user-sessions/refresh`, `POST /v1/app-user-sessions/logout`을 사용한다.
+
+`AppUserAccessTokenRefreshStrategy`와 `AppUserRefreshSessionStrategy`는 internal/dev bridge 확인용으로 유지한다.
+운영 앱 bundle에는 internal key를 넣지 않는다. 실제 Apple/Google provider exchange entrypoint는 아직 구현하지 않는다.
 
 ## 설치
 
@@ -73,32 +76,35 @@ let auth = AuthClient(
     )
 )
 
-let cachedAuth = try await AuthClient.restoringCachedSession(
-    configuration: .live(
+let cachedPublicDevAuth = try await AuthClient.restoringCachedSession(
+    configuration: .local(
         projectId: "project_123",
         publicClientId: "public_client_123"
     ),
-    refreshStrategy: AppUserAccessTokenRefreshStrategy(
+    refreshStrategy: PublicAppUserSessionStrategy(
         service: .chat,
-        appUserIdProvider: { "app_user_123" }
+        sessionProvider: DevMockAppUserSessionProvider(
+            providerSubject: "dev-user-1"
+        )
     ),
-    sessionCache: KeychainAuthSessionCache(account: "project_123:app_user_123")
+    sessionCache: KeychainAuthSessionCache(account: "project_123:dev-user-1")
 )
 
-let localEmailAuth = AuthClient(
+let publicDevAuth = AuthClient(
     configuration: .custom(
         baseURL: URL(string: "https://auth.example.com")!,
         projectId: "project_123",
         publicClientId: "public_client_123",
         environment: .test
     ),
-    refreshStrategy: AppUserRefreshSessionStrategy(
-        service: .email,
-        additionalHeaders: ["X-Spectra-Internal-Key": "local-dev-only"],
-        appUserIdProvider: { "app_user_123" }
+    refreshStrategy: PublicAppUserSessionStrategy(
+        service: .storage,
+        sessionProvider: DevMockAppUserSessionProvider(
+            providerSubject: "dev-user-1"
+        )
     ),
     sessionCache: KeychainAuthSessionCache(
-        account: "project_123:app_user_123"
+        account: "project_123:dev-user-1"
     )
 )
 
@@ -110,21 +116,25 @@ struct StorageClient {
     }
 }
 
-let storage = StorageClient(tokenProvider: auth)
+let storage = StorageClient(tokenProvider: publicDevAuth)
 ```
 
 Service별 token이 필요한 SDK는 `ServiceTokenProvider` helper를 사용한다.
 
 ```swift
-let notificationToken = try await auth.getAccessToken(for: .notification)
-let chatRequest = try await auth.authorizedRequest(
+let notificationToken = try await publicDevAuth.getAccessToken(for: .notification)
+let chatRequest = try await publicDevAuth.authorizedRequest(
     URLRequest(url: URL(string: "https://chat.spectra.kr/v1/socket-token")!),
     for: .chat
 )
 ```
 
-`additionalHeaders`의 internal key는 local/dev bridge 확인용이다. 운영 앱 bundle에는 내부 key나 Project API
-token을 넣지 않는다.
+`dev_mock` provider는 Auth Platform non-production runtime에서만 허용된다. `PublicAppUserSessionStrategy`는
+service별 access token을 요청하고 refresh token rotation이 발생하면 같은 `AuthClient` 안의 다른 service cache에도
+새 refresh token을 전파한다.
+
+`additionalHeaders`를 받는 internal/dev strategy의 internal key는 local bridge 확인용이다. 운영 앱 bundle에는
+내부 key나 Project API token을 넣지 않는다.
 
 모바일 앱 bundle에는 Project API token, provider client secret, Apple private key 같은 secret을 넣지 않는다. 앱은 AuthSDK를 통해 project/app-user context에 맞는 access token을 얻고, 다른 SDK는 `TokenProvider`만 의존한다.
 
@@ -143,6 +153,5 @@ swift test
 
 - Apple/Google native sign-in entrypoint
 - Auth Platform social exchange API 연동
-- 운영용 hosted app-user session API
 - server SDK/helper와 공개 JWKS/introspection 정책 고정
 - 실제 Spectra iOS 앱 integration과 실기기 E2E

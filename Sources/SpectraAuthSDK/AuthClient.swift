@@ -139,7 +139,11 @@ public actor AuthClient: ServiceTokenProvider {
         }
 
         _ = try configuration.validated()
-        let refreshedSession = try await refreshSession(for: service)
+        let refreshBaseSession = sessionForRefresh(for: service)
+        let refreshedSession = try await refreshSession(
+            for: service,
+            currentSession: refreshBaseSession
+        )
         guard refreshedSession.accessToken.isValid(
             for: service,
             at: clock.now,
@@ -147,13 +151,20 @@ public actor AuthClient: ServiceTokenProvider {
         ) else {
             throw AuthError.invalidTokenResponse
         }
+        try await propagateRefreshTokenRotation(
+            from: refreshBaseSession?.refreshToken,
+            to: refreshedSession.refreshToken,
+            refreshedService: service
+        )
         sessionsByService[service] = refreshedSession
         try await storeCachedSession(refreshedSession, for: service)
         return refreshedSession.accessToken
     }
 
-    private func refreshSession(for service: AuthService) async throws -> AuthSession {
-        let currentSession = sessionsByService[service]
+    private func refreshSession(
+        for service: AuthService,
+        currentSession: AuthSession?
+    ) async throws -> AuthSession {
         if let serviceAwareRefreshStrategy = refreshStrategy as? any ServiceAwareAuthTokenRefreshStrategy {
             return try await serviceAwareRefreshStrategy.refreshToken(
                 for: service,
@@ -168,6 +179,59 @@ public actor AuthClient: ServiceTokenProvider {
             )
         }
         throw AuthError.refreshUnavailable
+    }
+
+    private func sessionForRefresh(for service: AuthService) -> AuthSession? {
+        if let currentSession = sessionsByService[service] {
+            if let refreshToken = currentSession.refreshToken,
+               refreshToken.isExpired(at: clock.now) {
+                return reusableRefreshSession() ?? currentSession
+            }
+            return currentSession
+        }
+        return reusableRefreshSession()
+    }
+
+    private func reusableRefreshSession() -> AuthSession? {
+        sessionsByService.values.first { session in
+            guard let refreshToken = session.refreshToken else {
+                return false
+            }
+            return !refreshToken.isExpired(at: clock.now)
+        } ?? sessionsByService.values.first { session in
+            session.refreshToken != nil
+        }
+    }
+
+    private func propagateRefreshTokenRotation(
+        from oldRefreshToken: AppUserRefreshToken?,
+        to newRefreshToken: AppUserRefreshToken?,
+        refreshedService: AuthService
+    ) async throws {
+        guard let oldRefreshToken,
+              let newRefreshToken,
+              oldRefreshToken != newRefreshToken else {
+            return
+        }
+
+        let updatedSessions = sessionsByService.compactMap { service, session -> (AuthService, AuthSession)? in
+            guard service != refreshedService,
+                  session.refreshToken?.sessionId == oldRefreshToken.sessionId else {
+                return nil
+            }
+            return (
+                service,
+                AuthSession(
+                    user: session.user,
+                    accessToken: session.accessToken,
+                    refreshToken: newRefreshToken
+                )
+            )
+        }
+        for (service, updatedSession) in updatedSessions {
+            sessionsByService[service] = updatedSession
+            try await storeCachedSession(updatedSession, for: service)
+        }
     }
 
     private func restoreSessionFromCache(
