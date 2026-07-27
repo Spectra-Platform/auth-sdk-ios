@@ -156,6 +156,83 @@ final class AuthClientTests: XCTestCase {
         }
     }
 
+    func testAppUserRefreshSessionStrategyCreatesRefreshesAndRevokesServerSession() async throws {
+        let transport = QueueingTransport(responses: [
+            .success(
+                statusCode: 201,
+                body: appUserSessionBody(
+                    refreshToken: "spur_initial",
+                    accessToken: "spau_initial_chat",
+                    refreshExpiresAt: "2040-01-10T00:00:00.000Z",
+                    accessExpiresAt: "2040-01-02T03:04:05.000Z",
+                    sessionId: "00000000-0000-4000-8000-000000000101"
+                )
+            ),
+            .success(
+                statusCode: 201,
+                body: appUserSessionBody(
+                    refreshToken: "spur_rotated",
+                    accessToken: "spau_rotated_chat",
+                    refreshExpiresAt: "2040-01-20T00:00:00.000Z",
+                    accessExpiresAt: "2040-01-02T03:19:05.000Z",
+                    sessionId: "00000000-0000-4000-8000-000000000102"
+                )
+            ),
+            .success(statusCode: 204, body: Data()),
+        ])
+        let strategy = AppUserRefreshSessionStrategy(
+            service: .chat,
+            refreshTtlSeconds: 2_592_000,
+            accessTtlSeconds: 900,
+            additionalHeaders: ["X-Spectra-Internal-Key": "redacted-local-dev-key"],
+            appUserIdProvider: { "usr_123" },
+            transport: transport,
+            clock: FixedClock(now: Date(timeIntervalSince1970: 1_000))
+        )
+        let cache = InMemoryAuthSessionCache()
+        let client = AuthClient(
+            configuration: .fixture,
+            refreshStrategy: strategy,
+            sessionCache: cache,
+            clock: FixedClock(now: Date(timeIntervalSince1970: 1_000)),
+            defaultService: .chat
+        )
+
+        let initialToken = try await client.getAccessToken(for: .chat, forceRefresh: true)
+        let rotatedToken = try await client.getAccessToken(for: .chat, forceRefresh: true)
+        let cachedSession = try await cache.loadSession(for: .chat)
+        await client.logout()
+        let clearedSession = try await cache.loadSession(for: .chat)
+        let requests = await transport.requests
+
+        XCTAssertEqual(initialToken.value, "spau_initial_chat")
+        XCTAssertEqual(rotatedToken.value, "spau_rotated_chat")
+        XCTAssertEqual(cachedSession?.refreshToken?.value, "spur_rotated")
+        XCTAssertNil(clearedSession)
+        XCTAssertEqual(requests.count, 3)
+        XCTAssertEqual(requests[0].url?.path, "/internal/dev/v1/app-user-sessions")
+        XCTAssertEqual(requests[1].url?.path, "/internal/dev/v1/app-user-sessions/refresh")
+        XCTAssertEqual(requests[2].url?.path, "/internal/dev/v1/app-user-sessions/logout")
+        XCTAssertEqual(requests[0].value(forHTTPHeaderField: "X-Spectra-Internal-Key"), "redacted-local-dev-key")
+
+        let createJSON = try jsonBody(from: requests[0])
+        XCTAssertEqual(createJSON["project_id"] as? String, "project_123")
+        XCTAssertEqual(createJSON["public_client_id"] as? String, "public_client_123")
+        XCTAssertEqual(createJSON["environment"] as? String, "test")
+        XCTAssertEqual(createJSON["service"] as? String, "chat")
+        XCTAssertEqual(createJSON["app_user_id"] as? String, "usr_123")
+        XCTAssertEqual(createJSON["refresh_ttl_seconds"] as? Int, 2_592_000)
+        XCTAssertEqual(createJSON["access_ttl_seconds"] as? Int, 900)
+
+        let refreshJSON = try jsonBody(from: requests[1])
+        XCTAssertEqual(refreshJSON["refresh_token"] as? String, "spur_initial")
+        XCTAssertEqual(refreshJSON["service"] as? String, "chat")
+        XCTAssertEqual(refreshJSON["access_ttl_seconds"] as? Int, 900)
+
+        let logoutJSON = try jsonBody(from: requests[2])
+        XCTAssertEqual(logoutJSON["refresh_token"] as? String, "spur_rotated")
+    }
+
     func testAuthServiceIncludesChatAndCallAudiences() {
         XCTAssertEqual(AuthService.chat.rawValue, "chat")
         XCTAssertEqual(AuthService.call.rawValue, "call")
@@ -409,6 +486,74 @@ private actor RecordingTransport: AuthHTTPTransport {
             return (body, http)
         }
     }
+}
+
+private actor QueueingTransport: AuthHTTPTransport {
+    enum Response {
+        case success(statusCode: Int, body: Data)
+    }
+
+    private(set) var requests: [URLRequest] = []
+    private var responses: [Response]
+
+    init(responses: [Response]) {
+        self.responses = responses
+    }
+
+    func data(for request: URLRequest) async throws -> (Data, HTTPURLResponse) {
+        requests.append(request)
+        guard !responses.isEmpty else {
+            throw AuthError.invalidTokenResponse
+        }
+        let response = responses.removeFirst()
+        switch response {
+        case let .success(statusCode, body):
+            let http = HTTPURLResponse(
+                url: request.url!,
+                statusCode: statusCode,
+                httpVersion: nil,
+                headerFields: statusCode == 204 ? nil : ["Content-Type": "application/json"]
+            )!
+            return (body, http)
+        }
+    }
+}
+
+private func appUserSessionBody(
+    refreshToken: String,
+    accessToken: String,
+    refreshExpiresAt: String,
+    accessExpiresAt: String,
+    sessionId: String,
+    appUserId: String = "usr_123",
+    projectId: String = "project_123",
+    publicClientId: String = "public_client_123",
+    service: String = "chat"
+) -> Data {
+    """
+    {
+      "data": {
+        "refresh_token": "\(refreshToken)",
+        "access_token": "\(accessToken)",
+        "token_type": "Bearer",
+        "refresh_expires_at": "\(refreshExpiresAt)",
+        "access_expires_at": "\(accessExpiresAt)",
+        "project_id": "\(projectId)",
+        "environment": "test",
+        "public_client_id": "\(publicClientId)",
+        "app_user_id": "\(appUserId)",
+        "session_id": "\(sessionId)",
+        "scopes": ["chat.rooms.read", "chat.messages.read", "chat.messages.send", "chat.websocket"],
+        "audiences": ["\(service)"],
+        "experimental_surface": "internal_dev_app_user_session"
+      }
+    }
+    """.data(using: .utf8)!
+}
+
+private func jsonBody(from request: URLRequest) throws -> [String: Any] {
+    let body = try XCTUnwrap(request.httpBody)
+    return try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
 }
 
 private extension AuthClientConfiguration {

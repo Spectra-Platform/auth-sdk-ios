@@ -96,6 +96,14 @@ public actor AuthClient: ServiceTokenProvider {
     }
 
     public func logout() async {
+        if let revocationStrategy = refreshStrategy as? any AuthSessionRevocationStrategy {
+            for session in uniqueRefreshSessions() {
+                try? await revocationStrategy.revokeSession(
+                    configuration: configuration,
+                    session: session
+                )
+            }
+        }
         sessionsByService.removeAll()
         try? await sessionCache?.clearSession()
         if let serviceCache = sessionCache as? any ServiceAuthSessionCache {
@@ -220,6 +228,16 @@ public actor AuthClient: ServiceTokenProvider {
 
     private func primaryService(for session: AuthSession) -> AuthService {
         Self.primaryService(for: session, defaultService: defaultService)
+    }
+
+    private func uniqueRefreshSessions() -> [AuthSession] {
+        var seen = Set<String>()
+        return sessionsByService.values.filter { session in
+            guard let refreshToken = session.refreshToken else {
+                return false
+            }
+            return seen.insert(refreshToken.sessionId).inserted
+        }
     }
 
     private static func loadCachedSession(

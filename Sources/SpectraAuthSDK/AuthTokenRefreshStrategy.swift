@@ -19,6 +19,13 @@ public protocol ServiceAwareAuthTokenRefreshStrategy: AuthTokenRefreshStrategy {
     ) async throws -> AuthSession
 }
 
+public protocol AuthSessionRevocationStrategy: Sendable {
+    func revokeSession(
+        configuration: AuthClientConfiguration,
+        session: AuthSession
+    ) async throws
+}
+
 public protocol AuthClock: Sendable {
     var now: Date { get }
 }
