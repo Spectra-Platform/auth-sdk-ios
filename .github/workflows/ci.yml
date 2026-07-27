@@ -1,0 +1,32 @@
+name: AuthSDK iOS CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+jobs:
+  swiftpm:
+    name: Swift Package
+    runs-on: macos-15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Show Swift version
+        run: swift --version
+
+      - name: Resolve package
+        run: swift package resolve
+
+      - name: Describe package
+        run: swift package describe
+
+      - name: Test
+        run: swift test

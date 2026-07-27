@@ -3,7 +3,7 @@
 import PackageDescription
 
 let package = Package(
-    name: "SpectraAuthSDK",
+    name: "spectra-auth-sdk-ios",
     platforms: [
         .iOS(.v15),
         .macOS(.v12),
@@ -24,4 +24,3 @@ let package = Package(
         ),
     ]
 )
-
