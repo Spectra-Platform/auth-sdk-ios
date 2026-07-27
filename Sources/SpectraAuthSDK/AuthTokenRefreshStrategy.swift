@@ -7,6 +7,18 @@ public protocol AuthTokenRefreshStrategy: Sendable {
     ) async throws -> AuthSession
 }
 
+public protocol ServiceScopedAuthTokenRefreshStrategy: AuthTokenRefreshStrategy {
+    var service: AuthService { get }
+}
+
+public protocol ServiceAwareAuthTokenRefreshStrategy: AuthTokenRefreshStrategy {
+    func refreshToken(
+        for service: AuthService,
+        configuration: AuthClientConfiguration,
+        currentSession: AuthSession?
+    ) async throws -> AuthSession
+}
+
 public protocol AuthClock: Sendable {
     var now: Date { get }
 }

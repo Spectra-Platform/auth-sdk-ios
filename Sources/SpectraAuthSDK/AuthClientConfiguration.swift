@@ -85,7 +85,7 @@ public enum AuthEnvironment: String, Equatable, Sendable {
     case live
 }
 
-public enum AuthService: String, Equatable, Sendable, Codable {
+public enum AuthService: String, Equatable, Sendable, Codable, CaseIterable {
     case storage
     case email
     case notification

@@ -7,12 +7,16 @@ Swift Package 기반의 Spectra Platform iOS Auth SDK다. 이 저장소의 첫 �
 - Swift Package: `SpectraAuthSDK`
 - Package URL: `https://github.com/Spectra-Platform/auth-sdk-ios.git`
 - Public configuration: `baseURL`, `projectId`, `publicClientId`, `environment`, `redirectURI`
-- Public token provider: `TokenProvider`, `AuthClient`, `AccessToken`, `AuthSession`, `AppUser`
+- Public token provider: `TokenProvider`, `ServiceTokenProvider`, `AuthClient`, `AccessToken`, `AuthSession`, `AppUser`
 - Request helper: `authorizationHeader(forceRefresh:)`, `authorizedRequest(_:forceRefresh:)`
 - Refresh boundary: `AuthTokenRefreshStrategy`, `AppUserAccessTokenRefreshStrategy`
 - Environment helpers: `AuthClientConfiguration.live(...)`, `.local(...)`, `.custom(...)`
-- Session cache boundary: `AuthSessionCache`, `InMemoryAuthSessionCache`, `KeychainAuthSessionCache`
+- Session cache boundary: `AuthSessionCache`, `ServiceAuthSessionCache`, `InMemoryAuthSessionCache`, `KeychainAuthSessionCache`
 - 검증: `swift test`
+
+`AuthClient`는 기본 service용 legacy `TokenProvider` API와 service별 `ServiceTokenProvider` API를 함께 제공한다.
+StorageSDK·NotificationSDK·ChatSDK·CallSDK는 같은 Auth 객체를 공유하되 각각 자신의 service audience token을
+요청할 수 있고, SDK는 service별 access token을 별도로 cache한다.
 
 `AppUserAccessTokenRefreshStrategy`는 현재 Auth Platform의 internal/dev app-user token bridge를 호출한다.
 실제 소셜 로그인, Apple/Google provider 연동, refresh token rotation, 운영 배포는 아직
@@ -106,6 +110,16 @@ struct StorageClient {
 let storage = StorageClient(tokenProvider: auth)
 ```
 
+Service별 token이 필요한 SDK는 `ServiceTokenProvider` helper를 사용한다.
+
+```swift
+let notificationToken = try await auth.getAccessToken(for: .notification)
+let chatRequest = try await auth.authorizedRequest(
+    URLRequest(url: URL(string: "https://chat.spectra.kr/v1/socket-token")!),
+    for: .chat
+)
+```
+
 `additionalHeaders`의 internal key는 local/dev bridge 확인용이다. 운영 앱 bundle에는 내부 key나 Project API
 token을 넣지 않는다.
 
@@ -127,4 +141,5 @@ swift test
 - Auth Platform social exchange API 연동
 - 운영용 app-user access/refresh session API
 - refresh token rotation/reuse detection/logout revocation
+- server SDK/helper와 공개 JWKS/introspection 정책 고정
 - 실제 Spectra iOS 앱 integration과 실기기 E2E

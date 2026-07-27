@@ -8,6 +8,11 @@ public protocol TokenProvider: Sendable {
     func logout() async
 }
 
+public protocol ServiceTokenProvider: TokenProvider {
+    func getAccessToken(for service: AuthService, forceRefresh: Bool) async throws -> AccessToken
+    func refresh(for service: AuthService) async throws -> AccessToken
+}
+
 public extension TokenProvider {
     func getAccessToken() async throws -> AccessToken {
         try await getAccessToken(forceRefresh: false)
@@ -25,6 +30,35 @@ public extension TokenProvider {
         var authorized = request
         authorized.setValue(
             try await authorizationHeader(forceRefresh: forceRefresh),
+            forHTTPHeaderField: "Authorization"
+        )
+        return authorized
+    }
+}
+
+public extension ServiceTokenProvider {
+    func getAccessToken(for service: AuthService) async throws -> AccessToken {
+        try await getAccessToken(for: service, forceRefresh: false)
+    }
+
+    @discardableResult
+    func refresh(for service: AuthService) async throws -> AccessToken {
+        try await getAccessToken(for: service, forceRefresh: true)
+    }
+
+    func authorizationHeader(for service: AuthService, forceRefresh: Bool = false) async throws -> String {
+        let token = try await getAccessToken(for: service, forceRefresh: forceRefresh)
+        return "\(token.tokenType) \(token.value)"
+    }
+
+    func authorizedRequest(
+        _ request: URLRequest,
+        for service: AuthService,
+        forceRefresh: Bool = false
+    ) async throws -> URLRequest {
+        var authorized = request
+        authorized.setValue(
+            try await authorizationHeader(for: service, forceRefresh: forceRefresh),
             forHTTPHeaderField: "Authorization"
         )
         return authorized
@@ -54,5 +88,27 @@ public struct AccessToken: Codable, Equatable, Sendable {
 
     public func isExpired(at date: Date = Date(), leeway: TimeInterval = 60) -> Bool {
         expiresAt <= date.addingTimeInterval(leeway)
+    }
+
+    public func hasAudience(_ service: AuthService) -> Bool {
+        audience.contains(service.rawValue)
+    }
+
+    public var audienceServices: Set<AuthService> {
+        Set(audience.compactMap(AuthService.init(rawValue:)))
+    }
+
+    public func hasScope(_ scope: String) -> Bool {
+        scopes.contains(scope)
+    }
+
+    public func isValid(
+        for service: AuthService,
+        at date: Date = Date(),
+        leeway: TimeInterval = 60,
+        allowMissingAudience: Bool = false
+    ) -> Bool {
+        !isExpired(at: date, leeway: leeway)
+            && (hasAudience(service) || (allowMissingAudience && audience.isEmpty))
     }
 }

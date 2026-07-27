@@ -3,7 +3,7 @@ import Foundation
 #if canImport(Security)
 import Security
 
-public struct KeychainAuthSessionCache: AuthSessionCache {
+public struct KeychainAuthSessionCache: ServiceAuthSessionCache {
     public let service: String
     public let account: String
     public let accessGroup: String?
@@ -26,7 +26,31 @@ public struct KeychainAuthSessionCache: AuthSessionCache {
     }
 
     public func loadSession() async throws -> AuthSession? {
-        var query = baseQuery()
+        try loadSession(account: account)
+    }
+
+    public func storeSession(_ session: AuthSession) async throws {
+        try storeSession(session, account: account)
+    }
+
+    public func clearSession() async throws {
+        try clearSession(account: account)
+    }
+
+    public func loadSession(for service: AuthService) async throws -> AuthSession? {
+        try loadSession(account: scopedAccount(for: service))
+    }
+
+    public func storeSession(_ session: AuthSession, for service: AuthService) async throws {
+        try storeSession(session, account: scopedAccount(for: service))
+    }
+
+    public func clearSession(for service: AuthService) async throws {
+        try clearSession(account: scopedAccount(for: service))
+    }
+
+    private func loadSession(account: String) throws -> AuthSession? {
+        var query = baseQuery(account: account)
         query[kSecReturnData as String] = true
         query[kSecMatchLimit as String] = kSecMatchLimitOne
 
@@ -48,7 +72,7 @@ public struct KeychainAuthSessionCache: AuthSessionCache {
         }
     }
 
-    public func storeSession(_ session: AuthSession) async throws {
+    private func storeSession(_ session: AuthSession, account: String) throws {
         let data: Data
         do {
             data = try encoder.encode(session)
@@ -56,7 +80,7 @@ public struct KeychainAuthSessionCache: AuthSessionCache {
             throw AuthError.sessionCacheFailed(operation: .store, reason: "Session could not be encoded.")
         }
 
-        let query = baseQuery()
+        let query = baseQuery(account: account)
         let attributes: [String: Any] = [
             kSecValueData as String: data,
             kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly,
@@ -80,18 +104,18 @@ public struct KeychainAuthSessionCache: AuthSessionCache {
         }
     }
 
-    public func clearSession() async throws {
-        let status = SecItemDelete(baseQuery() as CFDictionary)
+    private func clearSession(account: String) throws {
+        let status = SecItemDelete(baseQuery(account: account) as CFDictionary)
         guard status == errSecSuccess || status == errSecItemNotFound else {
             throw keychainError(operation: .clear, status: status)
         }
     }
 
-    private func baseQuery() -> [String: Any] {
+    private func baseQuery(account targetAccount: String) -> [String: Any] {
         var query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
-            kSecAttrAccount as String: account,
+            kSecAttrAccount as String: targetAccount,
         ]
         if let accessGroup {
             query[kSecAttrAccessGroup as String] = accessGroup
@@ -99,12 +123,16 @@ public struct KeychainAuthSessionCache: AuthSessionCache {
         return query
     }
 
+    private func scopedAccount(for service: AuthService) -> String {
+        "\(account)#\(service.rawValue)"
+    }
+
     private func keychainError(operation: AuthSessionCacheOperation, status: OSStatus) -> AuthError {
         AuthError.sessionCacheFailed(operation: operation, reason: "Keychain OSStatus \(status).")
     }
 }
 #else
-public struct KeychainAuthSessionCache: AuthSessionCache {
+public struct KeychainAuthSessionCache: ServiceAuthSessionCache {
     public init(
         service: String = "kr.spectra.auth-sdk.session",
         account: String,
@@ -120,6 +148,18 @@ public struct KeychainAuthSessionCache: AuthSessionCache {
     }
 
     public func clearSession() async throws {
+        throw AuthError.sessionCacheUnavailable
+    }
+
+    public func loadSession(for service: AuthService) async throws -> AuthSession? {
+        throw AuthError.sessionCacheUnavailable
+    }
+
+    public func storeSession(_ session: AuthSession, for service: AuthService) async throws {
+        throw AuthError.sessionCacheUnavailable
+    }
+
+    public func clearSession(for service: AuthService) async throws {
         throw AuthError.sessionCacheUnavailable
     }
 }

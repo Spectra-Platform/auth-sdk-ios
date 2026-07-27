@@ -16,7 +16,7 @@ public struct URLSessionAuthHTTPTransport: AuthHTTPTransport {
     }
 }
 
-public struct AppUserAccessTokenRefreshStrategy: AuthTokenRefreshStrategy {
+public struct AppUserAccessTokenRefreshStrategy: ServiceScopedAuthTokenRefreshStrategy, ServiceAwareAuthTokenRefreshStrategy {
     public let service: AuthService
     public let ttlSeconds: Int?
     public let additionalHeaders: [String: String]
@@ -39,6 +39,14 @@ public struct AppUserAccessTokenRefreshStrategy: AuthTokenRefreshStrategy {
     }
 
     public func refreshToken(
+        configuration: AuthClientConfiguration,
+        currentSession: AuthSession?
+    ) async throws -> AuthSession {
+        try await refreshToken(for: service, configuration: configuration, currentSession: currentSession)
+    }
+
+    public func refreshToken(
+        for service: AuthService,
         configuration: AuthClientConfiguration,
         currentSession: AuthSession?
     ) async throws -> AuthSession {

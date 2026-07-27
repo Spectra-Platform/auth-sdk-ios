@@ -263,6 +263,76 @@ final class AuthClientTests: XCTestCase {
         XCTAssertEqual(restored?.accessToken.value, "cached-from-cache")
         XCTAssertEqual(currentUser?.id, "app_user_123")
     }
+
+    func testCachesAccessTokensByService() async throws {
+        let refreshStrategy = RecordingServiceRefreshStrategy(sessions: [
+            .storage: .fixture(tokenValue: "storage-token", service: .storage),
+            .notification: .fixture(tokenValue: "notification-token", service: .notification),
+        ])
+        let client = AuthClient(
+            configuration: .fixture,
+            refreshStrategy: refreshStrategy,
+            clock: FixedClock(now: Date(timeIntervalSince1970: 1_000))
+        )
+
+        let storage = try await client.getAccessToken(for: .storage)
+        let notification = try await client.getAccessToken(for: .notification)
+        let cachedStorage = try await client.getAccessToken(for: .storage)
+        let callCounts = await refreshStrategy.callCounts
+
+        XCTAssertEqual(storage.value, "storage-token")
+        XCTAssertEqual(notification.value, "notification-token")
+        XCTAssertEqual(cachedStorage.value, "storage-token")
+        XCTAssertEqual(callCounts[.storage], 1)
+        XCTAssertEqual(callCounts[.notification], 1)
+    }
+
+    func testForceRefreshOnlyRefreshesRequestedService() async throws {
+        let refreshStrategy = RecordingServiceRefreshStrategy(sessions: [
+            .storage: .fixture(tokenValue: "storage-token", service: .storage),
+            .notification: .fixture(tokenValue: "notification-token", service: .notification),
+        ])
+        let client = AuthClient(
+            configuration: .fixture,
+            refreshStrategy: refreshStrategy,
+            clock: FixedClock(now: Date(timeIntervalSince1970: 1_000))
+        )
+
+        _ = try await client.getAccessToken(for: .storage)
+        _ = try await client.getAccessToken(for: .notification)
+        let refreshedStorage = try await client.getAccessToken(for: .storage, forceRefresh: true)
+        let cachedNotification = try await client.getAccessToken(for: .notification)
+        let callCounts = await refreshStrategy.callCounts
+
+        XCTAssertEqual(refreshedStorage.value, "storage-token")
+        XCTAssertEqual(cachedNotification.value, "notification-token")
+        XCTAssertEqual(callCounts[.storage], 2)
+        XCTAssertEqual(callCounts[.notification], 1)
+    }
+
+    func testRejectsServiceTokenWithMismatchedAudience() async throws {
+        let refreshStrategy = RecordingServiceRefreshStrategy(sessions: [
+            .notification: .fixture(
+                tokenValue: "wrong-audience-token",
+                service: .notification,
+                audience: ["storage"]
+            ),
+        ])
+        let client = AuthClient(
+            configuration: .fixture,
+            refreshStrategy: refreshStrategy,
+            clock: FixedClock(now: Date(timeIntervalSince1970: 1_000))
+        )
+
+        do {
+            _ = try await client.getAccessToken(for: .notification)
+            XCTFail("Expected invalidTokenResponse")
+        } catch AuthError.invalidTokenResponse {
+            // expected
+        } catch {
+            XCTFail("Unexpected error: \(error)")
+        }
+    }
 }
 
 private actor RecordingRefreshStrategy: AuthTokenRefreshStrategy {
@@ -279,6 +349,34 @@ private actor RecordingRefreshStrategy: AuthTokenRefreshStrategy {
     ) async throws -> AuthSession {
         callCount += 1
         return refreshedSession
+    }
+}
+
+private actor RecordingServiceRefreshStrategy: ServiceAwareAuthTokenRefreshStrategy {
+    private(set) var callCounts: [AuthService: Int] = [:]
+    private let sessions: [AuthService: AuthSession]
+
+    init(sessions: [AuthService: AuthSession]) {
+        self.sessions = sessions
+    }
+
+    func refreshToken(
+        configuration: AuthClientConfiguration,
+        currentSession: AuthSession?
+    ) async throws -> AuthSession {
+        try await refreshToken(for: .storage, configuration: configuration, currentSession: currentSession)
+    }
+
+    func refreshToken(
+        for service: AuthService,
+        configuration: AuthClientConfiguration,
+        currentSession: AuthSession?
+    ) async throws -> AuthSession {
+        callCounts[service, default: 0] += 1
+        guard let session = sessions[service] else {
+            throw AuthError.refreshUnavailable
+        }
+        return session
     }
 }
 
@@ -326,16 +424,34 @@ private extension AuthClientConfiguration {
 private extension AuthSession {
     static func fixture(
         tokenValue: String,
-        expiresAt: Date = Date(timeIntervalSince1970: 2_000)
+        expiresAt: Date = Date(timeIntervalSince1970: 3_000),
+        service: AuthService = .storage,
+        scopes: Set<String>? = nil,
+        audience: Set<String>? = nil
     ) -> AuthSession {
         AuthSession(
             user: AppUser(id: "app_user_123", projectId: "project_123"),
             accessToken: AccessToken(
                 value: tokenValue,
                 expiresAt: expiresAt,
-                scopes: ["storage.objects.read"],
-                audience: ["storage"]
+                scopes: scopes ?? defaultScopes(for: service),
+                audience: audience ?? [service.rawValue]
             )
         )
+    }
+
+    private static func defaultScopes(for service: AuthService) -> Set<String> {
+        switch service {
+        case .storage:
+            return ["storage.objects.read"]
+        case .email:
+            return ["email.send"]
+        case .notification:
+            return ["notification.devices.write"]
+        case .chat:
+            return ["chat.websocket"]
+        case .call:
+            return ["call.join"]
+        }
     }
 }
