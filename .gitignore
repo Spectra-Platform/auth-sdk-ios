@@ -5,4 +5,6 @@ DerivedData/
 *.xcworkspace/
 xcuserdata/
 .DS_Store
-
+docs/
+WORKLOG.md
+HANDOFF.md
