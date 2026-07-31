@@ -1,6 +1,6 @@
 # Spectra AuthSDK for iOS
 
-Swift Package 기반의 Spectra Platform iOS Auth SDK다. 이 저장소의 첫 구현 slice는 앱이 공개 가능한 Project/App Client 설정으로 `AuthClient`를 만들고, StorageSDK·NotificationSDK 같은 다른 SDK가 `TokenProvider`를 주입받아 사용자 bearer token을 요청에 붙일 수 있는 최소 경계를 제공한다.
+Swift Package 기반의 Spectra Platform iOS Auth SDK다. 이 저장소의 첫 구현 slice는 앱이 공개 가능한 Project/App Client 설정으로 `AuthClient`를 만들고, StorageSDK·NotificationSDK 같은 개별 SDK가 `TokenProvider`를 주입받아 사용자 bearer token을 요청에 붙일 수 있는 최소 경계를 제공한다. Core SDK는 먼저 만들지 않고, Auth/Notification/Storage/Chat/Call 같은 개별 SDK가 안정된 뒤 이들을 조합하는 통합 진입점으로 설계한다.
 
 ## 현재 구현 상태
 
@@ -14,9 +14,10 @@ Swift Package 기반의 Spectra Platform iOS Auth SDK다. 이 저장소의 첫 �
 - Session cache boundary: `AuthSessionCache`, `ServiceAuthSessionCache`, `InMemoryAuthSessionCache`, `KeychainAuthSessionCache`
 - 검증: `swift test`
 
-`AuthClient`는 기본 service용 legacy `TokenProvider` API와 service별 `ServiceTokenProvider` API를 함께 제공한다.
-StorageSDK·NotificationSDK·ChatSDK·CallSDK는 같은 Auth 객체를 공유하되 각각 자신의 service audience token을
-요청할 수 있고, SDK는 service별 access token을 별도로 cache한다.
+`AuthClient`는 앱이 직접 쓰기 쉬운 `TokenProvider` API와 개별 SDK 패키지가 필요한 기능별 token을 요청할 수 있는
+low-level `ServiceTokenProvider` API를 함께 제공한다. 앱 화면 코드는 보통 `authClient`를 각 SDK에 주입하기만 하고,
+내부 token 교환 값을 직접 다루지 않는다. StorageSDK·NotificationSDK·ChatSDK·CallSDK는 같은 Auth 객체를 공유하되
+각 패키지 내부에서 필요한 기능 token을 요청하고 cache한다.
 
 `PublicAppUserSessionStrategy`는 Auth Platform의 public app-user session API를 호출한다. 이번 slice에서
 지원하는 provider는 non-production `dev_mock`이며, 최초 session 생성은
@@ -119,7 +120,8 @@ struct StorageClient {
 let storage = StorageClient(tokenProvider: publicDevAuth)
 ```
 
-Service별 token이 필요한 SDK는 `ServiceTokenProvider` helper를 사용한다.
+개별 SDK 패키지 내부에서 특정 기능 token이 필요한 경우에만 `ServiceTokenProvider` helper를 사용한다. 앱 개발자가
+직접 내부 대상 값이나 exchange 값을 조립하는 방식으로 안내하지 않는다.
 
 ```swift
 let notificationToken = try await publicDevAuth.getAccessToken(for: .notification)
