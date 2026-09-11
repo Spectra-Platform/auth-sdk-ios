@@ -8,6 +8,8 @@ public actor AuthClient: ServiceTokenProvider {
     private let refreshStrategy: any AuthTokenRefreshStrategy
     private let sessionCache: (any AuthSessionCache)?
     private let clock: any AuthClock
+    private var signInPending: Bool
+    private var pendingHostedSignIn: SpectraAuthPendingSignIn?
 
     public init(
         configuration: AuthClientConfiguration,
@@ -30,6 +32,8 @@ public actor AuthClient: ServiceTokenProvider {
         self.refreshStrategy = refreshStrategy
         self.sessionCache = sessionCache
         self.clock = clock
+        self.signInPending = false
+        self.pendingHostedSignIn = nil
     }
 
     public static func restoringCachedSession(
@@ -69,6 +73,14 @@ public actor AuthClient: ServiceTokenProvider {
         sessionsByService[defaultService]?.user ?? sessionsByService.values.first?.user
     }
 
+    public var currentSession: AuthSession? {
+        sessionsByService[defaultService] ?? sessionsByService[.auth] ?? sessionsByService.values.first
+    }
+
+    public func getSession() async -> AuthSession? {
+        currentSession
+    }
+
     public func getAccessToken(forceRefresh: Bool = false) async throws -> AccessToken {
         try await getAccessToken(
             for: defaultService,
@@ -83,7 +95,10 @@ public actor AuthClient: ServiceTokenProvider {
     }
 
     public func getAccessToken(for service: AuthService, forceRefresh: Bool = false) async throws -> AccessToken {
-        try await getAccessToken(
+        if service == .auth {
+            return try await getAccessToken(forceRefresh: forceRefresh)
+        }
+        return try await getAccessToken(
             for: service,
             forceRefresh: forceRefresh,
             allowMissingAudience: false
@@ -111,6 +126,150 @@ public actor AuthClient: ServiceTokenProvider {
                 try? await serviceCache.clearSession(for: service)
             }
         }
+    }
+
+    public func logout(
+        endBrowserSession: Bool,
+        postLogoutRedirectURI: URL? = nil
+    ) async throws {
+        let session = currentSession
+        var endSessionURL: URL?
+        if endBrowserSession {
+            endSessionURL = try buildEndSessionURL(
+                postLogoutRedirectURI: postLogoutRedirectURI
+            )
+        }
+        if let session,
+           let revocationStrategy = refreshStrategy as? any AuthSessionRevocationStrategy {
+            try await revocationStrategy.revokeSession(
+                configuration: configuration,
+                session: session
+            )
+        }
+        sessionsByService.removeAll()
+        try await sessionCache?.clearSession()
+        if let serviceCache = sessionCache as? any ServiceAuthSessionCache {
+            for service in AuthService.allCases {
+                try await serviceCache.clearSession(for: service)
+            }
+        }
+        if let endSessionURL {
+            _ = try await ASWebAuthenticationSessionProvider().authenticate(
+                authorizationURL: endSessionURL,
+                callbackURLScheme: postLogoutRedirectURI?.scheme,
+                prefersEphemeralWebBrowserSession: true
+            )
+        }
+    }
+
+    @discardableResult
+    public func refreshSession() async throws -> AuthSession {
+        _ = try await getAccessToken(for: .auth, forceRefresh: true)
+        guard let session = currentSession else {
+            throw AuthError.unauthenticated
+        }
+        return session
+    }
+
+    @discardableResult
+    func storeHostedAuthSession(_ session: AuthSession) async throws -> AuthSession {
+        sessionsByService.removeAll()
+        sessionsByService[.auth] = session
+        if defaultService != .auth {
+            sessionsByService[defaultService] = session
+        }
+        try await sessionCache?.storeSession(session)
+        if let serviceCache = sessionCache as? any ServiceAuthSessionCache {
+            try await serviceCache.storeSession(session, for: .auth)
+        }
+        return session
+    }
+
+    func beginHostedSignIn() throws {
+        guard !signInPending else {
+            throw AuthError.requestFailed(
+                code: "SIGN_IN_IN_PROGRESS",
+                status: nil,
+                requestId: nil,
+                message: "A sign-in is already in progress. Finish or cancel it before retrying.",
+                retryAfterSeconds: nil
+            )
+        }
+        signInPending = true
+    }
+
+    func endHostedSignIn() {
+        signInPending = false
+    }
+
+    func setPendingHostedSignIn(_ pending: SpectraAuthPendingSignIn) {
+        pendingHostedSignIn = pending
+    }
+
+    func consumePendingHostedSignIn(
+        matchingState state: String,
+        redirectURI: URL
+    ) throws -> SpectraAuthPendingSignIn {
+        guard let pendingHostedSignIn else {
+            throw AuthError.requestFailed(
+                code: "SIGN_IN_CALLBACK_UNEXPECTED",
+                status: nil,
+                requestId: nil,
+                message: "No Spectra Auth sign-in flow is waiting for a callback.",
+                retryAfterSeconds: nil
+            )
+        }
+        guard pendingHostedSignIn.state == state,
+              pendingHostedSignIn.redirectURI.spectraCallbackMatches(redirectURI) else {
+            throw AuthError.requestFailed(
+                code: "SIGN_IN_CALLBACK_MISMATCH",
+                status: nil,
+                requestId: nil,
+                message: "Spectra Auth callback did not match the pending sign-in state.",
+                retryAfterSeconds: nil
+            )
+        }
+        self.pendingHostedSignIn = nil
+        return pendingHostedSignIn
+    }
+
+    func clearPendingHostedSignIn() {
+        pendingHostedSignIn = nil
+    }
+
+    func hostedSessionStrategy() -> HostedAuthSessionStrategy {
+        (refreshStrategy as? HostedAuthSessionStrategy) ?? HostedAuthSessionStrategy()
+    }
+
+    public func buildEndSessionURL(
+        postLogoutRedirectURI: URL? = nil,
+        state: String? = nil
+    ) throws -> URL {
+        let logoutURL = try authEndpointURL(
+            baseURL: configuration.baseURL,
+            path: "/realms/platform-\(configuration.environment.rawValue)/protocol/openid-connect/logout"
+        )
+        guard var components = URLComponents(url: logoutURL, resolvingAgainstBaseURL: false) else {
+            throw AuthError.invalidConfiguration
+        }
+        var queryItems = [
+            URLQueryItem(name: "client_id", value: configuration.publicClientId),
+        ]
+        if let idToken = currentSession?.idToken {
+            queryItems.append(URLQueryItem(name: "id_token_hint", value: idToken))
+        }
+        if let postLogoutRedirectURI {
+            queryItems.append(URLQueryItem(name: "post_logout_redirect_uri", value: postLogoutRedirectURI.absoluteString))
+        }
+        if let state,
+           state.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false {
+            queryItems.append(URLQueryItem(name: "state", value: state))
+        }
+        components.queryItems = queryItems
+        guard let url = components.url else {
+            throw AuthError.invalidConfiguration
+        }
+        return url
     }
 
     @discardableResult

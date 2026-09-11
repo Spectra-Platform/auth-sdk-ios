@@ -8,6 +8,8 @@ Swift Package 기반의 Spectra Platform iOS Auth SDK다. 이 저장소의 첫 �
 - Package URL: `https://github.com/Spectra-Platform/auth-sdk-ios.git`
 - Public configuration: `baseURL`, `projectId`, `publicClientId`, `environment`, `redirectURI`
 - Public token provider: `TokenProvider`, `ServiceTokenProvider`, `AuthClient`, `AccessToken`, `AuthSession`, `AppUser`, `AppUserRefreshToken`
+- Hosted social login: `SpectraAuthClient`, `SpectraAuthProvider`, `SpectraAuthSignInOptions`, `SpectraGetAccessTokenOptions`,
+  `HostedAuthSessionStrategy`, `ASWebAuthenticationSessionProvider`
 - Request helper: `authorizationHeader(forceRefresh:)`, `authorizedRequest(_:forceRefresh:)`
 - Refresh boundary: `AuthTokenRefreshStrategy`, `PublicAppUserSessionStrategy`, `AppUserSessionProvider`, `DevMockAppUserSessionProvider`, `AppUserAccessTokenRefreshStrategy`, `AppUserRefreshSessionStrategy`
 - Environment helpers: `AuthClientConfiguration.live(...)`, `.local(...)`, `.custom(...)`
@@ -19,13 +21,19 @@ low-level `ServiceTokenProvider` API를 함께 제공한다. 앱 화면 코드�
 내부 token 교환 값을 직접 다루지 않는다. StorageSDK·NotificationSDK·ChatSDK·CallSDK는 같은 Auth 객체를 공유하되
 각 패키지 내부에서 필요한 기능 token을 요청하고 cache한다.
 
+`HostedAuthSessionStrategy`는 Auth Platform의 production hosted login API를 호출한다. Google/Apple 로그인은
+`ASWebAuthenticationSession`으로 Keycloak hosted authorization URL을 열고, SDK가 PKCE/state/nonce challenge를 만든 뒤
+callback authorization code를 `/platform/v1/auth/social/exchanges`로 교환한다. 기본 `getAccessToken()`은 Modo backend
+bootstrap용 Auth session access token을 반환한다. `getAccessToken(SpectraGetAccessTokenOptions(service: .storage/.chat/.notification))`
+같은 service token은 StorageSDK·ChatSDK·NotificationSDK 내부 요청용이며 앱 backend bootstrap bearer로 쓰지 않는다.
+
 `PublicAppUserSessionStrategy`는 Auth Platform의 public app-user session API를 호출한다. 이번 slice에서
 지원하는 provider는 non-production `dev_mock`이며, 최초 session 생성은
 `POST /v1/app-user-sessions/dev-provider`, 이후 refresh/logout은 각각
 `POST /v1/app-user-sessions/refresh`, `POST /v1/app-user-sessions/logout`을 사용한다.
 
 `AppUserAccessTokenRefreshStrategy`와 `AppUserRefreshSessionStrategy`는 internal/dev bridge 확인용으로 유지한다.
-운영 앱 bundle에는 internal key를 넣지 않는다. 실제 Apple/Google provider exchange entrypoint는 아직 구현하지 않는다.
+운영 앱 bundle에는 internal key를 넣지 않는다.
 
 ## 설치
 
@@ -65,21 +73,49 @@ target dependency에는 product 이름을 사용한다.
 
 자세한 앱 통합 흐름은 [iOS AuthSDK integration guide](docs/guides/ios-auth-sdk-integration.md)를 기준으로 본다.
 Modo Camp의 JS SDK parity 목표와 Auth callback 설정은
-[Modo Camp iOS Auth SDK parity draft](docs/guides/modo-camp-ios-auth-parity.md)에
+[Modo Camp iOS Auth SDK parity guide](docs/guides/modo-camp-ios-auth-parity.md)에
 별도로 정리한다.
 
 ```swift
 import Foundation
 import SpectraAuthSDK
 
-let auth = AuthClient(
-    configuration: .local(
+let auth = SpectraAuthClient(
+    configuration: .live(
         projectId: "project_123",
         publicClientId: "public_client_123",
-        redirectURI: URL(string: "spectra-example://auth/callback")
+        redirectURI: URL(string: "modocamp://spectra-auth/callback")
+    ),
+    sessionStore: KeychainAuthSessionCache(
+        account: "project_123:auth"
     )
 )
 
+let session = try await auth.signInWithGoogle()
+let bootstrapToken = try await auth.getAccessToken()
+
+var request = URLRequest(url: URL(string: "https://api.modocamp.example/v1/me/bootstrap")!)
+request.setValue("Bearer \(bootstrapToken.value)", forHTTPHeaderField: "Authorization")
+```
+
+로컬 또는 staging QA에서는 `.custom(...)`으로 test Auth base URL과 callback URI를 넘긴다.
+
+```swift
+let testAuth = SpectraAuthClient(
+    configuration: .custom(
+        baseURL: URL(string: "http://127.0.0.1:8081")!,
+        projectId: "project_123",
+        publicClientId: "public_client_123",
+        environment: .test,
+        redirectURI: URL(string: "modocamp-dev://spectra-auth/callback")
+    ),
+    sessionStore: KeychainAuthSessionCache(account: "project_123:test-auth")
+)
+```
+
+기존 `dev_mock` public session 전략은 non-production SDK 연동 검증용으로 남아 있다.
+
+```swift
 let cachedPublicDevAuth = try await AuthClient.restoringCachedSession(
     configuration: .local(
         projectId: "project_123",
@@ -156,7 +192,6 @@ swift test
 
 ## 현재 미완료 경계
 
-- Apple/Google native sign-in entrypoint
-- Auth Platform social exchange API 연동
+- Universal Link-only hosted login helper와 callback URL 생성 API
+- 실제 Google/Apple provider, Modo Camp iOS 앱, 실기기 E2E 검증
 - server SDK/helper와 공개 JWKS/introspection 정책 고정
-- 실제 Spectra iOS 앱 integration과 실기기 E2E

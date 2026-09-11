@@ -52,6 +52,19 @@
 - Modo Camp production config는 공개 가능한 `projectId`, `publicClientId`, `environment=live`,
   `authBaseUrl=https://auth.spectra.kr`와 앱 callback URI만 포함한다. provider secret, Project API token,
   refresh token 원문, authorization code는 문서·로그·진단 출력에 남기지 않는다.
+- 2026-09-11 production hosted login slice는 `SpectraAuthClient` alias와 `AuthClient` actor 확장으로 제공한다.
+  `preflightSignIn`, `signInWithGoogle`, `signInWithApple`, 공통 `signIn`, `currentSession`, `getSession`,
+  `getAccessToken(_:)`, `refreshSession()`, `logout(endBrowserSession:postLogoutRedirectURI:)`,
+  `handleCallback(url:)`를 app-facing surface로 둔다. 기존 `TokenProvider.refresh() -> AccessToken`은 호환성을 위해
+  유지하고, full Auth session refresh는 `refreshSession()`이 담당한다.
+- Hosted Google/Apple 로그인은 `ASWebAuthenticationSession`을 기본으로 사용한다. SDK는 PKCE verifier/challenge,
+  state/nonce challenge, Keycloak provider alias, callback state/redirect 검증, authorization code exchange를 처리한다.
+  Universal Link-only helper와 앱별 presentation context provider 주입은 확장 포인트로 남긴다.
+- `AuthService.auth`는 Modo backend bootstrap용 기본 Auth access token 경계다. `.storage`, `.chat`, `.notification`
+  등 service token은 `/platform/v1/auth/sessions/current/access-tokens`에서 Auth session bearer로 발급받으며,
+  SDK/개별 service 요청용이지 backend bootstrap proof로 쓰지 않는다.
+- `AuthError`는 JS SDK와 같은 방향으로 `code`, `status`, `requestId`, `message`, `retryAfterSeconds`를 안전하게
+  노출한다. access token, refresh token, authorization code, 이메일 원문은 error/log/diagnostics에 포함하지 않는다.
 
 ## 현재 구현 경계
 
@@ -63,8 +76,13 @@
   - `TokenProvider`
   - `ServiceTokenProvider`
   - `AuthClient`
+  - `SpectraAuthClient`
+  - `SpectraAuthProvider`
+  - `SpectraAuthSignInOptions`
+  - `SpectraGetAccessTokenOptions`
   - `AccessToken`
   - `AuthSession`
+  - `AppUserSummary`
   - `AppUserRefreshToken`
   - `AppUser`
   - `AuthTokenRefreshStrategy`
@@ -74,6 +92,9 @@
   - `PublicAppUserSessionStrategy`
   - `AppUserSessionProvider`
   - `DevMockAppUserSessionProvider`
+  - `HostedAuthSessionStrategy`
+  - `SpectraWebAuthenticationSessionProvider`
+  - `ASWebAuthenticationSessionProvider`
   - `AuthSessionCache`
   - `ServiceAuthSessionCache`
   - `InMemoryAuthSessionCache`
@@ -81,6 +102,13 @@
   - `AuthError`
 - `AuthClient`는 actor이며 만료되지 않은 in-memory access token은 service별로 그대로 반환하고,
   만료됐거나 `forceRefresh`면 주입된 refresh strategy를 호출한다.
+- Hosted login용 `AuthClient`는 기본 service를 `.auth`로 둔다. 기본 `getAccessToken()`은 audience 없는 Auth
+  session token을 반환하고, `getAccessToken(.init(service: .chat))`처럼 명시한 service는 service token endpoint를
+  호출한다.
+- `HostedAuthSessionStrategy`는 `/platform/v1/auth/social/challenges`, `/platform/v1/auth/social/exchanges`,
+  `/platform/v1/auth/sessions/refresh`, `DELETE /platform/v1/auth/sessions/current`,
+  `/platform/v1/auth/sessions/current/access-tokens`를 호출한다. `ASWebAuthenticationSession` completion URL과
+  `handleCallback(url:)`는 같은 state/redirect 검증과 exchange 로직을 공유한다.
 - `AuthClient.restoringCachedSession(...)`와 `restoreSessionFromCache()`로 cache에서 session을 복구할 수
   있고, refresh 성공 시 cache에 갱신 session을 저장한다. `initialSession`을 주입한 기존 동작은 유지한다.
 - `PublicAppUserSessionStrategy`는 provider abstraction을 통해 최초 session을 만들고, `DevMockAppUserSessionProvider`는
@@ -113,19 +141,15 @@
 
 ## 남은 작업과 미확정 항목
 
-- Apple/Google native sign-in entrypoint와 Auth social exchange API 연결
-- ASWebAuthenticationSession 또는 Universal Link 기반 hosted login callback 처리
-- `preflightSignIn(provider, options)`, `signInWithGoogle`, `signInWithApple`, `signIn(provider)` app-facing parity API
-- Apple/Google real provider exchange SDK entrypoint와 서버 API 연결
+- Universal Link-only hosted login helper와 앱별 callback URL 생성 public helper
 - app-facing API에서 `ServiceTokenProvider`/`AuthService`를 직접 다루지 않아도 되는 convenience 또는 future Core SDK
   composition 경계
 - public client/provider config registration, bundle/team/redirect 검증 반영
 - token TTL, refresh rotation grace, signing key/JWKS overlap
-- 실제 iOS 앱·실기기 E2E와 운영 배포
+- 실제 Modo Camp iOS 앱·시뮬레이터·실기기 Google/Apple E2E와 운영 배포
 - 후속 Spectra 앱/시뮬레이터 검증은 Google 로그인 세션이 아니라 사용자가 지정한 테스트유저 1/테스트유저 2와
   각 계정의 초기화 기능을 사용해 반복 가능하게 수행한다.
 
 ## 마지막으로 코드와 대조한 날짜
 
-- 2026-07-31
-- 2026-09-11 문서와 현재 public API를 Modo Camp parity 기준으로 재대조했다. 코드 구현 경계는 2026-07-31 상태와 동일하다.
+- 2026-09-11 production hosted login code, tests, README, parity guide와 대조했다.

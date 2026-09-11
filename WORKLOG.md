@@ -1,5 +1,18 @@
 # WORKLOG
 
+## 2026-09-11 — Modo Camp production hosted login slice
+
+- 상태: Swift Package 구현·local unit 검증 완료, 실제 Modo Camp 앱/실기기 provider E2E는 미검증
+- 목적: Modo Camp iOS SwiftUI 앱이 JS `@spectra-platform/auth-sdk@0.1.11`과 같은 의미로 Google/Apple hosted login,
+  Auth session token, refresh/logout, Keychain session store 경계를 사용할 수 있게 한다.
+- 결과: `SpectraAuthClient` alias와 hosted login API를 추가했다. `ASWebAuthenticationSession` 기반
+  `signInWithGoogle`/`signInWithApple`, PKCE/state/nonce challenge, authorization code exchange,
+  `currentSession`/`getSession`, `getAccessToken(_:)`, `refreshSession()`,
+  `logout(endBrowserSession:postLogoutRedirectURI:)`, `handleCallback(url:)`와 safe `AuthError` surface를 구현했다.
+  `AuthService.auth`를 추가해 Modo backend bootstrap용 Auth token과 storage/chat/notification service token 경계를 분리했다.
+- 검증: `swift test` 22 tests 통과. `git diff --check` 통과.
+- 상세 기록: [`docs/work-logs/2026-09-11-02-modo-camp-hosted-login-slice.md`](docs/work-logs/2026-09-11-02-modo-camp-hosted-login-slice.md)
+
 ## 2026-09-11 — Modo Camp Auth parity draft
 
 - 상태: 문서 계약 초안 완료, production Google/Apple login 구현은 미완료

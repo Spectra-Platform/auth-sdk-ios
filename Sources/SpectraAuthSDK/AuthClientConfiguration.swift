@@ -86,6 +86,7 @@ public enum AuthEnvironment: String, Equatable, Sendable {
 }
 
 public enum AuthService: String, Equatable, Sendable, Codable, CaseIterable {
+    case auth
     case storage
     case email
     case notification

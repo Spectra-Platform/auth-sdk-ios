@@ -28,11 +28,11 @@ import Foundation
 import SpectraAuthSDK
 
 let configuration = AuthClientConfiguration(
-    baseURL: URL(string: "https://console.spectra.kr")!,
+    baseURL: URL(string: "https://auth.spectra.kr")!,
     projectId: "project_xxx",
     publicClientId: "public_client_xxx",
-    environment: .test,
-    redirectURI: URL(string: "spectra-example://auth/callback")
+    environment: .live,
+    redirectURI: URL(string: "modocamp://spectra-auth/callback")
 )
 ```
 
@@ -56,11 +56,50 @@ let configuration = AuthClientConfiguration(
 
 ## 3. AuthClient 생성
 
-현재 SDK는 token provider 경계와 public app-user session strategy를 제공한다. 이번 slice의 public provider는
-non-production `dev_mock`이며, 실제 Apple/Google sign-in과 hosted exchange는 아직 구현되지 않았다.
+운영 hosted login은 `SpectraAuthClient` alias와 `AuthClient` actor 확장을 사용한다. `SpectraAuthClient`는
+기본 service를 `.auth`로 두며, 기본 `getAccessToken()`은 앱 backend bootstrap용 Auth session token을 반환한다.
 
 ```swift
-let authClient = AuthClient(configuration: configuration)
+let authClient = SpectraAuthClient(
+    configuration: configuration,
+    sessionStore: KeychainAuthSessionCache(account: "project_xxx:auth")
+)
+```
+
+local 또는 staging QA에서는 `.custom(...)`으로 test base URL과 callback URI를 분리한다.
+
+```swift
+let testAuthClient = SpectraAuthClient(
+    configuration: .custom(
+        baseURL: URL(string: "http://127.0.0.1:8081")!,
+        projectId: "project_xxx",
+        publicClientId: "public_client_xxx",
+        environment: .test,
+        redirectURI: URL(string: "modocamp-dev://spectra-auth/callback")
+    ),
+    sessionStore: KeychainAuthSessionCache(account: "project_xxx:test-auth")
+)
+```
+
+Google/Apple hosted login:
+
+```swift
+let session = try await authClient.signInWithGoogle(options: .init(
+    prompt: .selectAccount,
+    timeout: .seconds(300)
+))
+
+let appleSession = try await authClient.signInWithApple()
+```
+
+SwiftUI deep link routing은 custom scheme callback을 등록한 뒤 앱 진입점에서 forwarding한다.
+
+```swift
+.onOpenURL { url in
+    Task {
+        _ = try await authClient.handleCallback(url: url)
+    }
+}
 ```
 
 테스트나 내부 dev bridge에서 이미 받은 session이 있으면 `initialSession`으로 주입할 수 있다.
@@ -131,13 +170,24 @@ Project API token 또는 provider secret을 넣지 않는다.
 let token = try await authClient.getAccessToken()
 ```
 
+`token`은 Auth session access token이며 Modo backend bootstrap bearer proof로 사용한다.
+
 강제 refresh:
 
 ```swift
-let refreshed = try await authClient.getAccessToken(forceRefresh: true)
+let refreshedToken = try await authClient.getAccessToken(forceRefresh: true)
+let refreshedSession = try await authClient.refreshSession()
 ```
 
-현재 기본 refresh strategy는 `AuthError.refreshUnavailable`을 반환한다. `PublicAppUserSessionStrategy`는
+Storage/Chat/Notification 같은 service token은 명시적으로 service를 요청할 때만 발급한다. 이 token은 각 SDK
+내부 요청용이며 Modo backend bootstrap에는 사용하지 않는다.
+
+```swift
+let chatToken = try await authClient.getAccessToken(.init(service: .chat))
+```
+
+기본 refresh strategy는 `AuthError.refreshUnavailable`을 반환한다. `HostedAuthSessionStrategy`와
+`PublicAppUserSessionStrategy`는
 Auth Platform Identity Plane의 public app-user session API를 통해 refresh token rotation을 처리한다.
 service별 token 요청 중 refresh token이 회전되면 같은 `AuthClient` 안에서 해당 refresh session을 공유하던
 다른 service cache에도 새 refresh token을 전파한다.
@@ -187,10 +237,13 @@ StorageSDK가 생기면 같은 방식으로 AuthSDK의 `TokenProvider`를 주입
 ## 7. Logout
 
 ```swift
-await authClient.logout()
+try await authClient.logout(
+    endBrowserSession: true,
+    postLogoutRedirectURI: URL(string: "modocamp://spectra-auth/logout-complete")
+)
 ```
 
-`PublicAppUserSessionStrategy` 또는 `AppUserRefreshSessionStrategy`처럼 revocation을 지원하는 strategy를 쓰면
+Hosted login, `PublicAppUserSessionStrategy` 또는 `AppUserRefreshSessionStrategy`처럼 revocation을 지원하는 strategy를 쓰면
 SDK가 서버 logout endpoint를 호출한 뒤 in-memory session과 session cache를 지운다. 기본 strategy만 쓰는 경우에는
 local state만 지운다.
 
@@ -203,10 +256,13 @@ local state만 지운다.
 - authorized request helper
 - public dev/mock app-user session create/refresh/logout
 - service별 refresh token rotation propagation
+- ASWebAuthenticationSession 기반 Google/Apple hosted login
+- PKCE/state/nonce challenge와 authorization code exchange
+- Auth session refresh/logout public endpoint
+- safe error fields: `code`, `status`, `requestId`, `message`, `retryAfterSeconds`
 - logout server revocation과 local state clear
 
 ## 아직 완료가 아닌 것
 
-- Apple/Google native sign-in
-- Auth social exchange API
-- 실제 Spectra iOS app integration
+- Universal Link-only hosted login helper
+- 실제 Modo Camp iOS app, iOS simulator, 실기기 Google/Apple provider E2E

@@ -540,6 +540,206 @@ final class AuthClientTests: XCTestCase {
             XCTFail("Unexpected error: \(error)")
         }
     }
+
+    func testHostedGoogleSignInCreatesChallengeOpensAuthorizationUrlAndStoresAuthSession() async throws {
+        let transport = QueueingTransport(responses: [
+            .success(
+                statusCode: 201,
+                body: """
+                {
+                  "data": {
+                    "challenge_id": "challenge_123",
+                    "state": "state_123",
+                    "nonce": "nonce_123",
+                    "expires_at": "2040-01-01T00:00:00.000Z"
+                  }
+                }
+                """.data(using: .utf8)!
+            ),
+            .success(
+                statusCode: 201,
+                body: authSessionBody(
+                    accessToken: "auth_access",
+                    refreshToken: "auth_refresh",
+                    appUserId: "app_user_hosted",
+                    isNewAppUser: true,
+                    expiresIn: 900,
+                    refreshExpiresIn: 2_592_000
+                )
+            ),
+        ])
+        let cache = InMemoryAuthSessionCache()
+        let webAuth = MockWebAuthenticationSessionProvider()
+        let client = AuthClient(
+            configuration: .fixture,
+            sessionStore: cache,
+            transport: transport,
+            clock: FixedClock(now: Date(timeIntervalSince1970: 1_000))
+        )
+
+        let session = try await client.signInWithGoogle(options: SpectraAuthSignInOptions(
+            prompt: .selectAccount,
+            timeout: .seconds(5),
+            webAuthenticationSessionProvider: webAuth
+        ))
+        let accessToken = try await client.getAccessToken(SpectraGetAccessTokenOptions())
+        let cached = try await cache.loadSession()
+        let requests = await transport.requests
+        let authorizationURL = await webAuth.authorizationURL
+
+        XCTAssertEqual(session.user.id, "app_user_hosted")
+        XCTAssertEqual(session.accessToken.value, "auth_access")
+        XCTAssertEqual(session.accessToken.audience, [])
+        XCTAssertEqual(session.isNewAppUser, true)
+        XCTAssertEqual(accessToken.value, "auth_access")
+        XCTAssertEqual(cached?.accessToken.value, "auth_access")
+        XCTAssertEqual(requests.count, 2)
+        XCTAssertEqual(requests[0].url?.path, "/platform/v1/auth/social/challenges")
+        XCTAssertEqual(requests[1].url?.path, "/platform/v1/auth/social/exchanges")
+
+        let challengeJSON = try jsonBody(from: requests[0])
+        XCTAssertEqual(challengeJSON["project_id"] as? String, "project_123")
+        XCTAssertEqual(challengeJSON["public_client_id"] as? String, "public_client_123")
+        XCTAssertEqual(challengeJSON["provider"] as? String, "google")
+        XCTAssertEqual(challengeJSON["redirect_uri"] as? String, "spectra-example://auth/callback")
+        XCTAssertEqual(challengeJSON["pkce_challenge_method"] as? String, "S256")
+        XCTAssertNotNil(challengeJSON["pkce_challenge"] as? String)
+
+        let authComponents = try XCTUnwrap(URLComponents(
+            url: try XCTUnwrap(authorizationURL),
+            resolvingAgainstBaseURL: false
+        ))
+        let authQuery = queryDictionary(authComponents)
+        XCTAssertEqual(authComponents.path, "/realms/platform-test/protocol/openid-connect/auth")
+        XCTAssertEqual(authQuery["client_id"], "public_client_123")
+        XCTAssertEqual(authQuery["redirect_uri"], "spectra-example://auth/callback")
+        XCTAssertEqual(authQuery["state"], "state_123")
+        XCTAssertEqual(authQuery["nonce"], "nonce_123")
+        XCTAssertEqual(authQuery["code_challenge"], challengeJSON["pkce_challenge"] as? String)
+        XCTAssertEqual(authQuery["code_challenge_method"], "S256")
+        XCTAssertEqual(authQuery["prompt"], "select_account")
+        XCTAssertEqual(authQuery["kc_idp_hint"]?.hasPrefix("spectra-test-google-"), true)
+
+        let exchangeJSON = try jsonBody(from: requests[1])
+        XCTAssertEqual(exchangeJSON["challenge_id"] as? String, "challenge_123")
+        XCTAssertEqual(exchangeJSON["project_id"] as? String, "project_123")
+        XCTAssertEqual(exchangeJSON["public_client_id"] as? String, "public_client_123")
+        XCTAssertEqual(exchangeJSON["provider"] as? String, "google")
+        XCTAssertEqual(exchangeJSON["redirect_uri"] as? String, "spectra-example://auth/callback")
+        XCTAssertNotNil(exchangeJSON["pkce_verifier"] as? String)
+        let credential = try XCTUnwrap(exchangeJSON["credential"] as? [String: Any])
+        XCTAssertEqual(credential["kind"] as? String, "authorization_code")
+        XCTAssertEqual(credential["authorization_code"] as? String, "code_from_browser")
+    }
+
+    func testHostedServiceTokenUsesAuthSessionTokenAndKeepsAuthTokenBoundary() async throws {
+        let transport = QueueingTransport(responses: [
+            .success(
+                statusCode: 201,
+                body: serviceTokenBody(
+                    accessToken: "chat_service_access",
+                    service: "chat"
+                )
+            ),
+        ])
+        let client = AuthClient(
+            configuration: .fixture,
+            initialSession: .hostedFixture(
+                accessToken: "auth_bootstrap_access",
+                refreshToken: "auth_refresh"
+            ),
+            refreshStrategy: HostedAuthSessionStrategy(
+                transport: transport,
+                clock: FixedClock(now: Date(timeIntervalSince1970: 1_000))
+            ),
+            clock: FixedClock(now: Date(timeIntervalSince1970: 1_000)),
+            defaultService: .auth
+        )
+
+        let authToken = try await client.getAccessToken(SpectraGetAccessTokenOptions())
+        let chatToken = try await client.getAccessToken(SpectraGetAccessTokenOptions(service: .chat))
+        let requests = await transport.requests
+
+        XCTAssertEqual(authToken.value, "auth_bootstrap_access")
+        XCTAssertEqual(authToken.audience, [])
+        XCTAssertEqual(chatToken.value, "chat_service_access")
+        XCTAssertEqual(chatToken.audience, ["chat"])
+        XCTAssertEqual(requests.count, 1)
+        XCTAssertEqual(requests[0].url?.path, "/platform/v1/auth/sessions/current/access-tokens")
+        XCTAssertEqual(requests[0].value(forHTTPHeaderField: "Authorization"), "Bearer auth_bootstrap_access")
+        XCTAssertEqual((try jsonBody(from: requests[0]))["service"] as? String, "chat")
+    }
+
+    func testHostedRefreshAndLogoutUsePublicAuthSessionEndpoints() async throws {
+        let transport = QueueingTransport(responses: [
+            .success(
+                statusCode: 200,
+                body: authSessionBody(
+                    accessToken: "auth_access_refreshed",
+                    refreshToken: "auth_refresh_rotated",
+                    expiresIn: 900,
+                    refreshExpiresIn: 2_592_000
+                )
+            ),
+            .success(statusCode: 204, body: Data()),
+        ])
+        let cache = InMemoryAuthSessionCache()
+        let client = AuthClient(
+            configuration: .fixture,
+            initialSession: .hostedFixture(
+                accessToken: "auth_access_expired",
+                refreshToken: "auth_refresh",
+                expiresAt: Date(timeIntervalSince1970: 900)
+            ),
+            refreshStrategy: HostedAuthSessionStrategy(
+                transport: transport,
+                clock: FixedClock(now: Date(timeIntervalSince1970: 1_000))
+            ),
+            sessionCache: cache,
+            clock: FixedClock(now: Date(timeIntervalSince1970: 1_000)),
+            defaultService: .auth
+        )
+
+        let refreshed = try await client.refreshSession()
+        try await client.logout(endBrowserSession: false)
+        let requests = await transport.requests
+        let cached = try await cache.loadSession()
+
+        XCTAssertEqual(refreshed.accessToken.value, "auth_access_refreshed")
+        XCTAssertEqual(refreshed.refreshToken?.value, "auth_refresh_rotated")
+        XCTAssertNil(cached)
+        XCTAssertEqual(requests.count, 2)
+        XCTAssertEqual(requests[0].url?.path, "/platform/v1/auth/sessions/refresh")
+        XCTAssertEqual(requests[1].url?.path, "/platform/v1/auth/sessions/current")
+        XCTAssertEqual(requests[1].httpMethod, "DELETE")
+        XCTAssertEqual(requests[1].value(forHTTPHeaderField: "Authorization"), "Bearer auth_access_refreshed")
+        XCTAssertEqual((try jsonBody(from: requests[0]))["refresh_token"] as? String, "auth_refresh")
+        XCTAssertEqual((try jsonBody(from: requests[1]))["refresh_token"] as? String, "auth_refresh_rotated")
+    }
+
+    func testHostedCallbackRejectsMismatchedState() async throws {
+        let client = AuthClient(
+            configuration: .fixture,
+            sessionStore: InMemoryAuthSessionCache()
+        )
+        await client.setPendingHostedSignIn(SpectraAuthPendingSignIn(
+            provider: .apple,
+            redirectURI: URL(string: "spectra-example://auth/callback")!,
+            challengeId: "challenge_123",
+            state: "expected_state",
+            nonce: "nonce_123",
+            pkceVerifier: "verifier_123"
+        ))
+
+        do {
+            _ = try await client.handleCallback(url: URL(string: "spectra-example://auth/callback?code=code_from_browser&state=wrong_state")!)
+            XCTFail("Expected callback mismatch")
+        } catch let AuthError.requestFailed(code, _, _, _, _) {
+            XCTAssertEqual(code, "SIGN_IN_CALLBACK_MISMATCH")
+        } catch {
+            XCTFail("Unexpected error: \(error)")
+        }
+    }
 }
 
 private actor RecordingRefreshStrategy: AuthTokenRefreshStrategy {
@@ -649,6 +849,21 @@ private actor QueueingTransport: AuthHTTPTransport {
     }
 }
 
+private actor MockWebAuthenticationSessionProvider: SpectraWebAuthenticationSessionProvider {
+    private(set) var authorizationURL: URL?
+
+    func authenticate(
+        authorizationURL: URL,
+        callbackURLScheme: String?,
+        prefersEphemeralWebBrowserSession: Bool
+    ) async throws -> URL {
+        self.authorizationURL = authorizationURL
+        let components = URLComponents(url: authorizationURL, resolvingAgainstBaseURL: false)
+        let state = components?.queryItems?.first { $0.name == "state" }?.value ?? ""
+        return URL(string: "spectra-example://auth/callback?code=code_from_browser&state=\(state)")!
+    }
+}
+
 private func appUserSessionBody(
     refreshToken: String,
     accessToken: String,
@@ -681,9 +896,66 @@ private func appUserSessionBody(
     """.data(using: .utf8)!
 }
 
+private func authSessionBody(
+    accessToken: String,
+    refreshToken: String,
+    appUserId: String = "app_user_123",
+    projectId: String = "project_123",
+    isNewAppUser: Bool = false,
+    expiresIn: Int,
+    refreshExpiresIn: Int
+) -> Data {
+    """
+    {
+      "data": {
+        "access_token": "\(accessToken)",
+        "refresh_token": "\(refreshToken)",
+        "app_user_id": "\(appUserId)",
+        "project_id": "\(projectId)",
+        "is_new_app_user": \(isNewAppUser),
+        "expires_in": \(expiresIn),
+        "refresh_expires_in": \(refreshExpiresIn),
+        "token_type": "Bearer",
+        "user": {
+          "display_name": "Test User"
+        }
+      }
+    }
+    """.data(using: .utf8)!
+}
+
+private func serviceTokenBody(
+    accessToken: String,
+    service: String,
+    projectId: String = "project_123",
+    appUserId: String = "app_user_123"
+) -> Data {
+    """
+    {
+      "data": {
+        "access_token": "\(accessToken)",
+        "token_type": "Bearer",
+        "expires_at": "2040-01-02T03:04:05.000Z",
+        "project_id": "\(projectId)",
+        "environment": "test",
+        "app_user_id": "\(appUserId)",
+        "session_id": "00000000-0000-4000-8000-000000000301",
+        "scopes": ["\(service).read"],
+        "audiences": ["\(service)"]
+      }
+    }
+    """.data(using: .utf8)!
+}
+
 private func jsonBody(from request: URLRequest) throws -> [String: Any] {
     let body = try XCTUnwrap(request.httpBody)
     return try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
+}
+
+private func queryDictionary(_ components: URLComponents) -> [String: String] {
+    Dictionary(uniqueKeysWithValues: (components.queryItems ?? []).compactMap { item in
+        item.value.map { (item.name, $0) }
+    })
 }
 
 private extension AuthClientConfiguration {
@@ -705,6 +977,27 @@ private extension AuthClientConfiguration {
 }
 
 private extension AuthSession {
+    static func hostedFixture(
+        accessToken: String,
+        refreshToken: String,
+        expiresAt: Date = Date(timeIntervalSince1970: 3_000)
+    ) -> AuthSession {
+        AuthSession(
+            user: AppUser(id: "app_user_123", projectId: "project_123"),
+            accessToken: AccessToken(
+                value: accessToken,
+                expiresAt: expiresAt,
+                scopes: [],
+                audience: []
+            ),
+            refreshToken: AppUserRefreshToken(
+                value: refreshToken,
+                expiresAt: Date(timeIntervalSince1970: 4_000),
+                sessionId: "auth_session_123"
+            )
+        )
+    }
+
     static func fixture(
         tokenValue: String,
         expiresAt: Date = Date(timeIntervalSince1970: 3_000),
@@ -725,6 +1018,8 @@ private extension AuthSession {
 
     private static func defaultScopes(for service: AuthService) -> Set<String> {
         switch service {
+        case .auth:
+            return []
         case .storage:
             return ["storage.objects.read"]
         case .email:

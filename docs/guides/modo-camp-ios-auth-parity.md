@@ -1,21 +1,21 @@
-# Modo Camp iOS Auth SDK parity draft
+# Modo Camp iOS Auth SDK parity guide
 
 Last checked: 2026-09-11
 
-This guide fixes the Swift Auth SDK target for Modo Camp iOS. It is based on
+This guide fixes the Swift Auth SDK surface for Modo Camp iOS. It is based on
 the local `@spectra-platform/auth-sdk@0.1.11` source and the current
-`auth-sdk-ios` implementation. It is a contract draft, not proof that the
-Apple/Google production login flow is already implemented on iOS.
+`auth-sdk-ios` implementation.
 
 ## Current state
 
 - Existing SwiftPM package: `SpectraAuthSDK`
 - Current iOS package implements configuration, token provider, service token
-  provider, refresh strategies, Keychain session cache and dev/mock public
-  app-user session support.
-- Current iOS package does not yet implement Google/Apple native sign-in,
-  ASWebAuthenticationSession hosted login, Universal Link callback exchange or
-  `preflightSignIn(provider, options)` as an app-facing login API.
+  provider, refresh strategies, Keychain session cache, dev/mock public
+  app-user session support and ASWebAuthenticationSession-based Google/Apple
+  hosted login.
+- Universal Link-only routing is documented as an extension point. The default
+  app-facing implementation uses ASWebAuthenticationSession completion URLs and
+  the same `handleCallback(url:)` validation/exchange path.
 - JS parity source: `@spectra-platform/auth-sdk@0.1.11`
 
 ## Recommended package structure
@@ -102,10 +102,8 @@ public actor SpectraAuthClient: ServiceTokenProvider {
     ) async throws -> AuthSession
 
     public func handleCallback(url: URL) async throws -> Bool
-    public func getAccessToken(
-        _ options: SpectraGetAccessTokenOptions
-    ) async throws -> AccessToken
-    public func refresh() async throws -> AuthSession
+    public func getAccessToken(_ options: SpectraGetAccessTokenOptions) async throws -> AccessToken
+    public func refreshSession() async throws -> AuthSession
     public func logout(
         endBrowserSession: Bool,
         postLogoutRedirectURI: URL?
@@ -113,10 +111,43 @@ public actor SpectraAuthClient: ServiceTokenProvider {
 }
 ```
 
-The default `getAccessToken()` must return the Auth session access token. Modo
+The default `getAccessToken()` and `getAccessToken(.init(service: .auth))`
+return the Auth session access token. Modo
 Camp backend bootstrap should call `POST /v1/me/bootstrap` with this token as
 `Authorization: Bearer`. Storage, Chat and Notification service tokens are
 requested only by their SDKs and must not be used for backend bootstrap.
+
+The older `TokenProvider.refresh() -> AccessToken` remains for compatibility.
+Use `refreshSession()` when app code needs the full refreshed Auth session.
+
+## Modo Camp SwiftUI usage
+
+```swift
+import SpectraAuthSDK
+
+let auth = SpectraAuthClient(
+    configuration: .live(
+        projectId: "13d7ce4b-dd2a-4267-b15f-bbdb80b853da",
+        publicClientId: "app_sOULkwyuWH_UeH2Cy7Dj0CKb",
+        redirectURI: URL(string: "modocamp://spectra-auth/callback")!
+    ),
+    sessionStore: KeychainAuthSessionCache(
+        account: "13d7ce4b-dd2a-4267-b15f-bbdb80b853da:auth"
+    )
+)
+
+let session = try await auth.signInWithGoogle(options: .init(
+    prompt: .selectAccount,
+    timeout: .seconds(300)
+))
+
+let bootstrapToken = try await auth.getAccessToken()
+let chatToken = try await auth.getAccessToken(.init(service: .chat))
+```
+
+`bootstrapToken` is for the Modo backend bootstrap proof. `chatToken` is a
+service token and should be consumed by Chat SDK requests, not by Modo backend
+bootstrap.
 
 ## Callback and deep link guide
 
@@ -155,13 +186,13 @@ code, but diagnostics should redact email-like values.
 
 | JS 0.1.11 | Swift target | Current iOS state |
 | --- | --- | --- |
-| `preflightSignIn(options)` | `preflightSignIn(provider, options)` | Missing app-facing API |
-| `signInWithGoogle(options)` | `signInWithGoogle(options:)` | Missing production login |
-| `signInWithApple(options)` | `signInWithApple(options:)` | Missing production login |
-| `getSession()` | `getSession()` / `currentSession` | Partial session state exists |
+| `preflightSignIn(options)` | `preflightSignIn(provider, options)` | Implemented, local unit-verified |
+| `signInWithGoogle(options)` | `signInWithGoogle(options:)` | Implemented with ASWebAuthenticationSession, local unit-verified |
+| `signInWithApple(options)` | `signInWithApple(options:)` | Implemented with same provider flow, local unit-verified |
+| `getSession()` | `getSession()` / `currentSession` | Implemented |
 | `getAccessToken()` | `getAccessToken()` | Implemented as token provider |
 | `getAccessToken({ service })` | `getAccessToken(service:)` | Implemented low-level service provider |
-| `refresh()` | `refresh()` | Implemented for current strategies |
-| `logout({ endBrowserSession })` | `logout(endBrowserSession:postLogoutRedirectURI:)` | Logout exists; hosted browser end-session target missing |
+| `refresh()` | `refreshSession()` for full session, `refresh()` for token compatibility | Implemented |
+| `logout({ endBrowserSession })` | `logout(endBrowserSession:postLogoutRedirectURI:)` | Implemented; browser end-session uses ASWebAuthenticationSession |
 | localStorage session store | Keychain session store | Implemented |
-| popup callback relay | ASWebAuthenticationSession/deep link callback | Missing |
+| popup callback relay | ASWebAuthenticationSession/deep link callback | Implemented for ASWebAuthenticationSession; Universal Link-only helper remains an extension point |
