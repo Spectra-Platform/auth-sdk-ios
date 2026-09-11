@@ -45,6 +45,13 @@
   public dev/mock strategy와 Apple/Google provider exchange와는 별도다.
 - Swift Package Manager 배포는 Git URL 기반으로 시작한다. repository URL은 `https://github.com/Spectra-Platform/auth-sdk-ios.git`, product 이름은 `SpectraAuthSDK`다.
 - release tag는 `vMAJOR.MINOR.PATCH` 형식으로 만들며, 최초 tag는 공개 버전 번호를 확정한 뒤 생성한다. 현재 문서와 CI는 tag 배포가 가능한 상태를 준비하지만 tag 자체는 만들지 않는다.
+- 2026-09-11 Modo Camp iOS parity 목표는 React 웹 `@spectra-platform/auth-sdk@0.1.11`의
+  Auth session access token 의미를 Swift에서도 유지하는 것이다. 기본 `getAccessToken()`은
+  Modo backend `POST /v1/me/bootstrap`의 bearer proof로 사용하고, `getAccessToken(for: .storage/.chat/.notification)`
+  같은 service token은 개별 SDK 내부에서만 사용한다.
+- Modo Camp production config는 공개 가능한 `projectId`, `publicClientId`, `environment=live`,
+  `authBaseUrl=https://auth.spectra.kr`와 앱 callback URI만 포함한다. provider secret, Project API token,
+  refresh token 원문, authorization code는 문서·로그·진단 출력에 남기지 않는다.
 
 ## 현재 구현 경계
 
@@ -107,6 +114,8 @@
 ## 남은 작업과 미확정 항목
 
 - Apple/Google native sign-in entrypoint와 Auth social exchange API 연결
+- ASWebAuthenticationSession 또는 Universal Link 기반 hosted login callback 처리
+- `preflightSignIn(provider, options)`, `signInWithGoogle`, `signInWithApple`, `signIn(provider)` app-facing parity API
 - Apple/Google real provider exchange SDK entrypoint와 서버 API 연결
 - app-facing API에서 `ServiceTokenProvider`/`AuthService`를 직접 다루지 않아도 되는 convenience 또는 future Core SDK
   composition 경계
@@ -119,3 +128,4 @@
 ## 마지막으로 코드와 대조한 날짜
 
 - 2026-07-31
+- 2026-09-11 문서와 현재 public API를 Modo Camp parity 기준으로 재대조했다. 코드 구현 경계는 2026-07-31 상태와 동일하다.

@@ -1,5 +1,15 @@
 # WORKLOG
 
+## 2026-09-11 — Modo Camp Auth parity draft
+
+- 상태: 문서 계약 초안 완료, production Google/Apple login 구현은 미완료
+- 목적: Modo Camp iOS가 React 웹 Auth SDK와 같은 의미의 Auth access token, session store,
+  callback/deep link, logout 경계를 사용할 수 있도록 Swift public API 목표를 고정한다.
+- 결과: `docs/guides/modo-camp-ios-auth-parity.md`에 Modo production 설정, API 초안,
+  ASWebAuthenticationSession/Universal Link callback 가이드, redaction 규칙과 JS parity checklist를 추가했다.
+- 검증: 문서 변경만 수행했다. Swift code는 변경하지 않았다.
+- 상세 기록: [`docs/work-logs/2026-09-11-01-modo-camp-auth-parity.md`](docs/work-logs/2026-09-11-01-modo-camp-auth-parity.md)
+
 ## 2026-07-31 — SDK public surface alignment
 
 - 상태: 문서 보정 완료, 코드 public API는 호환성 유지를 위해 유지
